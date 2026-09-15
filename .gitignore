@@ -1,0 +1,11 @@
+lrc_env/
+uploads/*
+downloads/*
+temp/
+separated/
+node_modules/
+venv/
+ffmpeg/
+__pycache__/
+*.pyc
+*.log

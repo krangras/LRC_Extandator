@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LRC Studio 5.0 — точный ELRC</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* ===== Дополнения: обложка, артист/название, редактор ===== */
+        .field-input {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.04);
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+        .field-input:focus { outline: none; border-color: #a78bfa; }
+
+        .cover-source {
+            display: block;
+            font-size: 11px;
+            color: #7a7a9a;
+            margin-top: 2px;
+        }
+        .cover-manual-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .cover-manual-row input {
+            flex: 1;
+            min-width: 200px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.04);
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+        .cover-manual-row input:focus { outline: none; border-color: #a78bfa; }
+
+        .btn {
+            padding: 7px 12px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.05);
+            color: #e0e0e0;
+            font-size: 13px;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn:hover { background: rgba(167,139,250,0.15); border-color: #a78bfa; }
+        .btn.primary { background: #a78bfa; color: #1a1a2e; border-color: #a78bfa; font-weight: 600; }
+        .btn.primary:hover { background: #c4b5fd; }
+        .btn.danger { border-color: rgba(255,100,100,0.4); color: #ff8888; }
+        .btn.danger:hover { background: rgba(255,80,80,0.15); border-color: #ff8888; }
+        .btn.tiny { padding: 2px 6px; font-size: 11px; border-radius: 5px; }
+
+        .editor-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            align-items: center;
+            margin-top: 10px;
+        }
+        .editor-toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 8px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 10px;
+        }
+        .editor-toolbar-label {
+            font-size: 12px;
+            color: #8888aa;
+            margin-right: 2px;
+        }
+        .editor-toolbar select {
+            padding: 6px 8px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.04);
+            color: #e0e0e0;
+            font-size: 13px;
+        }
+        .editor-hint {
+            font-size: 12px;
+            color: #7a7a9a;
+            margin-top: 8px;
+            line-height: 1.5;
+        }
+
+        .editor-lines {
+            max-height: 55vh;
+            overflow-y: auto;
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .editor-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid transparent;
+            transition: border-color 0.15s, background 0.15s;
+        }
+        .editor-row.current-playing {
+            border-color: #a78bfa;
+            background: rgba(167,139,250,0.08);
+        }
+        .editor-row-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .editor-time {
+            width: 84px;
+            padding: 5px 6px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.12);
+            background: rgba(255,255,255,0.04);
+            color: #e0e0e0;
+            font-size: 12px;
+            font-family: monospace;
+        }
+        .editor-row-btns {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .editor-text {
+            flex: 1;
+            line-height: 2;
+            padding-top: 3px;
+        }
+        .editor-word {
+            display: inline-block;
+            padding: 2px 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        .editor-word:hover { background: rgba(255,255,255,0.08); }
+        .editor-word.selected-word { background: rgba(167,139,250,0.35); box-shadow: 0 0 0 1px #a78bfa; }
+        .editor-word.active-word { background: #a78bfa; color: #1a1a2e; }
+        .editor-word[contenteditable="true"] {
+            background: rgba(255,255,255,0.1);
+            box-shadow: 0 0 0 1px #a78bfa;
+            outline: none;
+        }
+        .editor-word-time {
+            font-size: 9px;
+            color: #666688;
+            display: block;
+            text-align: center;
+            line-height: 1.2;
+        }
+        .add-word-btn {
+            display: inline-block;
+            padding: 2px 8px;
+            margin-left: 4px;
+            border-radius: 6px;
+            border: 1px dashed rgba(255,255,255,0.25);
+            color: #8888aa;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .add-word-btn:hover { border-color: #a78bfa; color: #a78bfa; }
+        .add-line-btn { margin-top: 12px; width: 100%; }
+        .editor-selected-info {
+            font-size: 12px;
+            color: #a78bfa;
+        }
+        .editor-audio-controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 16px;
+            align-items: center;
+        }
+
+        /* ===== Поиск текста ===== */
+        .field-label-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .field-label-row .field-label { margin-bottom: 0; }
+
+        .search-results {
+            margin-top: 12px;
+            border: 1px solid rgba(167,139,250,0.25);
+            border-radius: 10px;
+            background: rgba(167,139,250,0.04);
+            padding: 10px 12px;
+        }
+        .search-results-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #a78bfa;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .search-provider-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #7a7a9a;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+        .search-provider-row:last-child { border-bottom: none; }
+        .search-provider-name {
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            font-size: 11px;
+            color: #a78bfa;
+            min-width: 90px;
+        }
+        .search-provider-state {
+            font-size: 12px;
+        }
+        .search-provider-state.searching { color: #a78bfa; }
+        .search-provider-state.empty { color: #555577; }
+        .search-provider-state.error { color: #ef4444; }
+        .search-provider-state.found { color: #22c55e; }
+
+        .search-result {
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 8px;
+            background: rgba(0,0,0,0.3);
+            padding: 8px 10px;
+            margin-top: 8px;
+        }
+        .search-result-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+        }
+        .search-result-source {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 20px;
+            background: rgba(167,139,250,0.15);
+            color: #a78bfa;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .search-result-status {
+            font-size: 11px;
+            color: #7a7a9a;
+            flex: 1;
+        }
+        .search-result-status.synced { color: #22c55e; }
+        .search-result-actions { display: flex; gap: 6px; }
+        .search-result-lyrics {
+            max-height: 180px;
+            overflow-y: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            line-height: 1.7;
+            color: #94a3b8;
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: rgba(255,255,255,0.02);
+            border-radius: 6px;
+            padding: 8px 10px;
+        }
+        .search-result-lyrics::-webkit-scrollbar { width: 4px; }
+        .search-result-lyrics::-webkit-scrollbar-track { background: transparent; }
+        .search-result-lyrics::-webkit-scrollbar-thumb { background: rgba(168, 85, 247, 0.3); border-radius: 4px; }
+
+        /* ===== Telegram ===== */
+        .tg-card {
+            margin-bottom: 16px;
+            border: 1px solid rgba(41, 128, 185, 0.25);
+            background: rgba(41, 128, 185, 0.04);
+        }
+        .tg-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        .tg-title {
+            font-size: 16px;
+            font-weight: 700;
+        }
+        .tg-status {
+            font-size: 12px;
+            color: #7a7a9a;
+        }
+        .tg-status.ok { color: #22c55e; }
+        .tg-status.warn { color: #f59e0b; }
+        .tg-status.err { color: #ef4444; }
+        .tg-row {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .tg-row .field-input { flex: 1; }
+        .tg-row .btn { flex-shrink: 0; }
+        .tg-card .field-hint { margin: 4px 0 0; }
+        .tg-error {
+            margin-top: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            font-size: 13px;
+            line-height: 1.5;
+            white-space: pre-line;
+        }
+    </style>
+</head>
+<body>
+
+<div class="bg-effects">
+    <div class="bg-orb bg-orb-1"></div>
+    <div class="bg-orb bg-orb-2"></div>
+    <div class="bg-orb bg-orb-3"></div>
+</div>
+<div class="bg-grid"></div>
+
+<div class="app-wrapper">
+    <div class="container">
+
+        <header class="header">
+            <div class="logo-wrapper">
+                <svg viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+            </div>
+            <h1>LRC Studio</h1>
+            <p class="subtitle">Extended LRC с <span>пословной</span> синхронизацией</p>
+        </header>
+
+        <!-- Навигация по вкладкам -->
+        <div class="tabs-container">
+            <button class="tab-btn active" data-target="generatorTab">Генератор</button>
+            <button class="tab-btn" data-target="editorTab" id="editorTabBtn" disabled>Редактор</button>
+        </div>
+
+        <!-- Вкладка 1: Генератор -->
+        <div id="generatorTab" class="tab-pane active">
+
+        <!-- Скачивание трека (track-dl) -->
+        <div class="card tg-card">
+            <div class="tg-header">
+                <span class="tg-title">📥 Скачать с YouTube</span>
+                <span id="tgStatus" class="tg-status">готово</span>
+            </div>
+            <div class="tg-row">
+                <input id="tgQuery" class="field-input" placeholder="Название песни, напр. Post Malone - Sunflower">
+                <button type="button" id="tgSearchBtn" class="btn primary">Скачать 🎵</button>
+            </div>
+            <p class="field-hint">Найдём на YouTube, впишем метаданные и обложку (Deezer/iTunes), затем сразу сделаем ELRC. Файл сохранится в <code>downloads/</code>.</p>
+            <div id="tgResult"></div>
+        </div>
+
+        <main class="card">
+
+            <!-- ОБЛОЖКА -->
+            <div id="coverContainer" class="cover-container hidden">
+                <div class="cover-wrapper">
+                    <img id="coverImage" src="" alt="Обложка альбома">
+                    <div class="cover-info">
+                        <span id="coverTitle">Название трека</span>
+                        <span id="coverArtist">Исполнитель</span>
+                        <span id="coverSource" class="cover-source"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- АРТИСТ / НАЗВАНИЕ -->
+            <div class="settings-row">
+                <div class="setting-item">
+                    <label for="artistInput">Исполнитель</label>
+                    <input type="text" id="artistInput" class="field-input" placeholder="определится автоматически, если не указано">
+                </div>
+                <div class="setting-item">
+                    <label for="titleInput">Название трека</label>
+                    <input type="text" id="titleInput" class="field-input" placeholder="определится автоматически, если не указано">
+                </div>
+                <div class="setting-item">
+                    <label for="albumInput">Альбом</label>
+                    <input type="text" id="albumInput" class="field-input" placeholder="определится автоматически, если не указано">
+                </div>
+            </div>
+
+            <div class="cover-manual-row">
+                <input type="text" id="coverUrlInput" placeholder="Прямая ссылка на обложку (необязательно)…">
+                <button type="button" id="coverUrlBtn" class="btn">🖼️ Вставить</button>
+                <button type="button" id="coverSearchBtn" class="btn">🔍 Найти обложку</button>
+            </div>
+
+            <!-- DROP ZONE -->
+            <div class="drop-zone" id="dropZone">
+                <div class="drop-icon">
+                    <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                </div>
+                <p class="drop-text">Перетащи аудио сюда или <strong>выбери файл</strong></p>
+                <span class="drop-hint">MP3, WAV, FLAC, M4A, AAC, OGG, OPUS · до 200 МБ</span>
+                <input type="file" id="fileInput" accept=".mp3,.wav,.flac,.m4a,.aac,.ogg,.opus,audio/*" hidden>
+            </div>
+
+            <!-- ТЕКСТ -->
+            <div class="field-group">
+                <div class="field-label-row">
+                    <label class="field-label" for="lyricsInput">
+                        <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                        Точный текст песни
+                        <span style="color:var(--text-muted); font-weight:400; text-transform:none; letter-spacing:0">(опционально)</span>
+                    </label>
+                    <button type="button" id="searchLyricsBtn" class="btn">🔍 Найти текст</button>
+                    <button type="button" id="importLyricsBtn" class="btn">📂 Открыть LRC/ELRC</button>
+                    <input type="file" id="lyricsFileInput" accept=".lrc,.elrc,.txt,text/plain" hidden>
+                </div>
+                <p class="field-hint">Вставь текст песни для идеальной точности таймингов. Или нажми «Найти текст» — результаты появятся в реальном времени.</p>
+                <div class="textarea-wrapper">
+                    <textarea id="lyricsInput" rows="5" placeholder="All you ever did was wreck me&#10;Yeah, you, you wreck me..."></textarea>
+                    <span class="char-count" id="charCount">0</span>
+                </div>
+                <div id="searchResults" class="search-results hidden">
+                    <div class="search-results-header">
+                        <span id="searchResultsTitle">Поиск текста…</span>
+                        <button type="button" id="closeSearchBtn" class="btn tiny">✕ Закрыть</button>
+                    </div>
+                    <div id="searchResultsList"></div>
+                </div>
+            </div>
+
+            <!-- НАСТРОЙКИ -->
+            <div class="settings-row">
+                <div class="setting-item">
+                    <label for="languageSelect">Язык песни</label>
+                    <div class="select-wrapper">
+                        <select id="languageSelect">
+                            <option value="rus" selected>Русский</option>
+                            <option value="eng">English</option>
+                            <option value="ukr">Українська</option>
+                            <option value="kaz">Қазақша</option>
+                            <option value="bel">Беларуская</option>
+                            <option value="tur">Türkçe</option>
+                            <option value="deu">Deutsch</option>
+                            <option value="fra">Français</option>
+                            <option value="spa">Español</option>
+                            <option value="ita">Italiano</option>
+                            <option value="pol">Polski</option>
+                            <option value="por">Português</option>
+                            <option value="ron">Română</option>
+                            <option value="ara">العربية</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="setting-item">
+                    <label for="formatSelect">Формат результата</label>
+                    <div class="select-wrapper">
+                        <select id="formatSelect">
+                            <option value="elrc_exact" selected>ELRC точный (миллисекунды)</option>
+                            <option value="elrc_compatible">ELRC совместимый</option>
+                            <option value="lrc">LRC построчный</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- КНОПКА -->
+            <button class="generate-btn" id="generateBtn">
+                <span class="btn-icon">
+                    <svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                </span>
+                <span class="btn-loader"></span>
+                <span class="btn-text">Создать ELRC</span>
+            </button>
+
+            <!-- ПРОГРЕСС -->
+            <div class="progress-section" id="progressSection">
+                <div class="progress-header">
+                    <span class="progress-label" id="progressLabel">Подготовка...</span>
+                    <span class="progress-percent" id="progressPercent">0%</span>
+                </div>
+                <div class="progress-track">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="progress-steps">
+                    <div class="progress-step" id="step1">
+                        <div class="progress-step-icon">
+                            <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                        </div>
+                        <span class="progress-step-label">Загрузка</span>
+                    </div>
+                    <div class="progress-step" id="step2">
+                        <div class="progress-step-icon">
+                            <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        </div>
+                        <span class="progress-step-label">Распознавание</span>
+                    </div>
+                    <div class="progress-step" id="step3">
+                        <div class="progress-step-icon">
+                            <svg viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                        </div>
+                        <span class="progress-step-label">Генерация</span>
+                    </div>
+                </div>
+                <div class="progress-details" id="progressDetails">
+                    <span id="progressTime">⏱ 0 сек</span>
+                    <span id="progressStatus">⏳ Ожидание...</span>
+                </div>
+                <div class="log-container" id="logContainer"></div>
+            </div>
+
+            <!-- РЕЗУЛЬТАТ -->
+            <div class="result-section" id="resultSection">
+                <div class="result-card">
+                    <div class="result-header">
+                        <span class="result-title">
+                            <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                            <span id="resultTitleText">Готово!</span>
+                        </span>
+                        <div class="result-actions">
+                            <button class="btn-action" id="copyBtn">📋 Копировать</button>
+                            <button class="btn-action" id="editBtn">✏️ Редактировать</button>
+                            <button class="btn-action primary" id="downloadBtn">💾 Скачать ELRC</button>
+                            <button class="btn-action" id="downloadSimpleBtn">LRC</button>
+                        </div>
+                    </div>
+                    <pre class="lrc-output" id="lrcOutput"></pre>
+                </div>
+            </div>
+
+
+
+            <!-- ПЛЕЕР С КАРАОКЕ -->
+            <div id="playerContainer" class="player-container hidden">
+                <div class="player-wrapper">
+                    <div class="player-controls">
+                        <button id="playBtn" class="play-btn">▶</button>
+                        <span id="timeDisplay" class="time-display">00:00 / 00:00</span>
+                        <input type="range" id="seekSlider" class="seek-slider" value="0" step="0.01">
+                    </div>
+                    <div id="karaokeContainer" class="karaoke-container"></div>
+                </div>
+            </div>
+
+        </main>
+        </div>
+
+        <!-- Вкладка 2: Полноценный Редактор -->
+        <div id="editorTab" class="tab-pane">
+            <div class="card">
+                <!-- Инструменты -->
+                <div class="editor-tools">
+                    <button id="saveEditorBtn" class="btn">💾 Применить и Сохранить</button>
+                    <button id="undoEditorBtn" class="btn" title="Ctrl+Z">↶ Отменить</button>
+                    <button id="redoEditorBtn" class="btn" title="Ctrl+Y">↷ Вернуть</button>
+                    <button id="validateEditorBtn" class="btn">✓ Проверить</button>
+                    <button id="stopEditorBtn" class="btn" style="background: rgba(239, 68, 68, 0.2); color: var(--error);">⏹ Стоп</button>
+                    <label style="color: var(--text-dim); font-size: 0.9rem;">
+                        Скорость: 
+                        <select id="editorSpeedSelect" class="editor-input" style="width: 80px;">
+                            <option value="1">1.0x</option>
+                            <option value="0.75">0.75x</option>
+                            <option value="0.5" selected>0.5x</option>
+                        </select>
+                    </label>
+                    <label class="editor-offset-control">
+                        Сдвиг, мс
+                        <input id="editorOffsetInput" class="editor-input" type="number" value="0" step="10">
+                        <button id="applyOffsetBtn" class="btn" type="button">Применить ко всем</button>
+                    </label>
+                </div>
+
+                <div id="editorStatus" class="editor-status">Тайминги ещё не проверены</div>
+
+                <!-- Караоке-плеер -->
+                <div class="editor-player" id="editorPlayer">
+                    <div class="editor-player-controls">
+                        <button id="editorPlayBtn" class="play-btn">▶</button>
+                        <span id="editorTimeDisplay" class="time-display">00:00 / 00:00</span>
+                        <input type="range" id="editorSeekSlider" class="seek-slider" value="0" step="0.01">
+                    </div>
+                    <canvas id="editorWaveform" class="editor-waveform" height="110"></canvas>
+                    <div id="editorKaraoke" class="editor-karaoke"></div>
+                </div>
+
+                <div class="editor-shortcuts">
+                    <span><kbd>Space</kbd> воспроизведение</span>
+                    <span><kbd>S</kbd> начало выбранного слова</span>
+                    <span><kbd>E</kbd> конец слова</span>
+                    <span><kbd>←/→</kbd> сдвиг 10 мс</span>
+                    <span><kbd>Shift</kbd> + стрелка — 100 мс</span>
+                </div>
+                
+                <!-- Строки с словами -->
+                <div id="editorLines" class="editor-lines-container"></div>
+                <button id="addLineBtn" class="btn add-line-btn" type="button">＋ Добавить строку</button>
+
+                <!-- Live LRC превью -->
+                <div class="editor-preview-section">
+                    <div class="editor-preview-header">
+                        <span class="editor-preview-title">📄 Live ELRC</span>
+                        <span class="editor-preview-hint">обновляется автоматически</span>
+                    </div>
+                    <pre class="editor-lrc-preview" id="editorLrcPreview"></pre>
+                </div>
+            </div>
+        </div>
+
+        <footer class="footer">
+            <span>Сделано с <span class="heart">♥</span> для Annisokay и не только</span>
+        </footer>
+
+    </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/script.js"></script>
+</body>
+</html>
