@@ -1,4 +1,5 @@
 lrc_env/
+.venv/
 uploads/*
 downloads/*
 temp/
@@ -9,3 +10,4 @@ ffmpeg/
 __pycache__/
 *.pyc
 *.log
+.env

@@ -15,3 +15,7 @@ uroman
 Unidecode
 nltk
 lyric-align[asr]
+yt-dlp
+transformers>=4.40
+nvidia-cublas-cu12
+nvidia-cuda-runtime-cu12

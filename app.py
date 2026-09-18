@@ -65,6 +65,7 @@ def _result_payload(result, source_name, cover=None, mp3=None):
         'title': result.get('title', ''),
         'album': result.get('album', ''),
         'validation_issues': result.get('validation_issues', []),
+        'alignment_quality': result.get('alignment_quality'),
     }
     if mp3:
         payload['mp3'] = mp3
@@ -162,6 +163,12 @@ def get_artist_title(filename):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Small endpoint used by the UI to distinguish a network failure from a job failure."""
+    return jsonify({'ok': True})
 
 
 @app.route('/cover', methods=['GET'])
@@ -389,4 +396,7 @@ if __name__ == '__main__':
     ║   http://127.0.0.1:5000             ║
     ╚═══════════════════════════════════════╝
     """)
-    app.run(debug=True, threaded=True, use_reloader=False, host='0.0.0.0', port=5000)
+    debug = os.environ.get('LRC_DEBUG', '').strip().lower() in {'1', 'true', 'yes', 'on'}
+    host = os.environ.get('LRC_HOST', '127.0.0.1')
+    port = int(os.environ.get('LRC_PORT', '5000'))
+    app.run(debug=debug, threaded=True, use_reloader=False, host=host, port=port)

@@ -554,6 +554,11 @@
     });
 
     function startProcessing(file) {
+        if (window.location.protocol === 'file:') {
+            showToast('Открой приложение через http://127.0.0.1:5000, а не напрямую как HTML-файл', 'error');
+            addLog('❌ Страница запущена через file://. Запусти ./run.sh и открой http://127.0.0.1:5000');
+            return;
+        }
         const formData = new FormData();
         formData.append('audio', file);
         formData.append('lyrics', lyricsInput.value);
@@ -602,9 +607,12 @@
             }
         })
         .catch(err => {
-            showToast('Ошибка: ' + err.message, 'error');
+            const detail = err && err.message === 'Failed to fetch'
+                ? 'Сервер недоступен или соединение оборвалось. Проверь http://127.0.0.1:5000/health и терминал с ./run.sh.'
+                : (err.message || String(err));
+            showToast('Ошибка: ' + detail, 'error');
             resetUI();
-            addLog('❌ Ошибка: ' + err.message);
+            addLog('❌ Ошибка: ' + detail);
         });
     }
 
@@ -651,6 +659,11 @@
 
         resetUI();
         const issueCount = (resultData.validation_issues || []).length;
+        const quality = Number(resultData.alignment_quality);
+        if (Number.isFinite(quality)) {
+            const percent = Math.round(Math.max(0, Math.min(1, quality)) * 100);
+            addLog(`📊 Прямое сопоставление слов: ${percent}%`);
+        }
         addLog(issueCount ? `⚠️ Готово, автоматически исправлено замечаний: ${issueCount}` : '✅ Готово! ELRC проверен и готов к скачиванию');
     }
 

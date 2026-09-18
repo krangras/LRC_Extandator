@@ -67,6 +67,13 @@ def _py_roller_exe():
 
 def _resolve_large_v3_path():
     """Возвращает локальный путь к faster-whisper large-v3 из HF-кэша (без скачивания)."""
+    configured = os.environ.get("LRC_WHISPER_MODEL_PATH", "").strip()
+    if configured:
+        configured = os.path.abspath(os.path.expanduser(configured))
+        if os.path.isfile(os.path.join(configured, "model.bin")):
+            return configured
+        logger.warning("LRC_WHISPER_MODEL_PATH не содержит model.bin: %s", configured)
+
     snap_root = os.path.join(
         os.path.expanduser("~"), ".cache", "huggingface", "hub",
         "models--Systran--faster-whisper-large-v3", "snapshots",
@@ -98,6 +105,27 @@ def _handle_roller_event(evt, progress_callback):
             progress_callback(int(round(lo + pct * (hi - lo))), message or "⏳ Working...")
     elif ev_type == "stage_completed":
         progress_callback(hi, f"✅ {message}" if message else "✅ Done")
+    elif ev_type == "download_progress":
+        pct = evt.get("progress")
+        if isinstance(pct, (int, float)):
+            progress_callback(int(round(5 + pct * 25)), message or "⬇️ Downloading model...")
+    elif ev_type == "download_completed":
+        progress_callback(30, message or "✅ Model ready")
+
+
+def _nvidia_lib_paths():
+    """Пути к CUDA runtime/cublas из pip-пакетов nvidia-* (если установлены)."""
+    paths = []
+    try:
+        import nvidia.cublas.lib
+        import nvidia.cuda_runtime.lib
+        import pathlib
+        for mod in (nvidia.cublas.lib, nvidia.cuda_runtime.lib):
+            if mod.__file__:
+                paths.append(str(pathlib.Path(mod.__file__).parent))
+    except Exception:
+        pass
+    return paths
 
 
 def run_roller_process(cmd, progress_callback=None, timeout=3600):
@@ -105,6 +133,10 @@ def run_roller_process(cmd, progress_callback=None, timeout=3600):
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    nvidia_paths = _nvidia_lib_paths()
+    if nvidia_paths:
+        current = env.get("LD_LIBRARY_PATH", "")
+        env["LD_LIBRARY_PATH"] = ":".join(nvidia_paths) + (":" + current if current else "")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -177,8 +209,10 @@ def build_roller_command(stages, audio_path, lyrics_path, language, job_dir):
         cmd += ["--lyrics", lyrics_path]
     cmd += ["--language", roller_language(language)]
     model = _resolve_large_v3_path()
+    model = model or os.environ.get("LRC_ROLLER_MODEL", "").strip() or "large-v2"
     if model:
         cmd += ["--transcriber-model-name", model]
+        logger.info("🧠 Using whisper model: %s", model)
     alignment_path = os.path.join(job_dir, "alignment.json")
     roller_path = os.path.join(job_dir, "out.lrc")
     cmd += [
@@ -286,11 +320,17 @@ def _words_from_alignment_line(line):
 
     line_start = float(start) if start is not None else 0.0
     line_end = float(end) if end is not None else line_start + 4.0
+    matched = sum(1 for entry in entries if entry.get("aligned"))
     entries = _interpolate_line_words(entries, line_start, line_end)
-    return [
+    words = [
         {"word": e["word"], "start": round(e["start"], 3), "end": round(e["end"], 3)}
         for e in entries
     ]
+    return words, {
+        "matched_words": matched,
+        "total_words": len(entries),
+        "interpolated_words": len(entries) - matched,
+    }
 
 
 def lines_from_alignment(payload):
@@ -303,9 +343,25 @@ def lines_from_alignment(payload):
         start = line.get("assigned_time")
         if start is None:
             start = line.get("start_time", 0.0)
-        words = _words_from_alignment_line(line)
-        result.append({"start": round(float(start), 3), "text": raw, "words": words})
+        words, quality = _words_from_alignment_line(line)
+        matched = quality["matched_words"]
+        total = quality["total_words"]
+        result.append({
+            "start": round(float(start), 3),
+            "text": raw,
+            "words": words,
+            "alignment_quality": round(matched / total, 3) if total else 0.0,
+            "matched_words": matched,
+            "interpolated_words": quality["interpolated_words"],
+        })
     return result
+
+
+def _alignment_quality(lines):
+    """Weighted fraction of words matched directly by the aligner."""
+    total = sum(len(line.get("words") or []) for line in lines)
+    matched = sum(int(line.get("matched_words") or 0) for line in lines)
+    return round(matched / total, 3) if total else 0.0
 
 
 def _sanitize_word_times(words, line_start, line_end):
@@ -805,6 +861,7 @@ def generate_elrc(audio_path, artist=None, title=None, album=None, progress_call
             'lines': elrc_lines,
             'line_count': len(elrc_lines),
             'word_count': sum(len(l.get('words', [])) for l in elrc_lines),
+            'alignment_quality': _alignment_quality(elrc_lines),
             'breaks': breaks,
             'validation_issues': outputs["issues"],
         }
@@ -823,5 +880,8 @@ def generate_elrc(audio_path, artist=None, title=None, album=None, progress_call
                 os.remove(lyrics_path)
             except OSError:
                 pass
-        if job_dir:
+        keep_artifacts = os.environ.get("LRC_KEEP_ARTIFACTS", "").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if job_dir and not keep_artifacts:
             shutil.rmtree(job_dir, ignore_errors=True)
