@@ -1,0 +1,22 @@
+.v6-setting { min-width: 200px; }
+.v6-quality-card {
+  margin: 0 0 14px;
+  border: 1px solid rgba(148,163,184,.18);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(15,23,42,.72);
+  backdrop-filter: blur(14px);
+}
+.v6-quality-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+.v6-quality-head strong { font-size:13px; letter-spacing:.03em; }
+#v6QualityGrade { font-size:11px; font-weight:800; padding:3px 8px; border-radius:999px; background:rgba(148,163,184,.14); }
+.v6-quality-card[data-grade="excellent"] #v6QualityGrade,
+.v6-quality-card[data-grade="good"] #v6QualityGrade { color:#86efac; background:rgba(34,197,94,.14); }
+.v6-quality-card[data-grade="usable"] #v6QualityGrade { color:#fde68a; background:rgba(245,158,11,.14); }
+.v6-quality-card[data-grade="reject"] #v6QualityGrade { color:#fca5a5; background:rgba(239,68,68,.14); }
+.v6-quality-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+.v6-quality-grid div { padding:8px; border-radius:8px; background:rgba(255,255,255,.035); }
+.v6-quality-grid span { display:block; font-size:10px; color:#7a7a9a; margin-bottom:2px; }
+.v6-quality-grid b { font-size:13px; color:#e2e8f0; }
+.v6-quality-note { margin-top:9px; font-size:11px; color:#94a3b8; line-height:1.4; }
+@media (max-width: 760px) { .v6-quality-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }

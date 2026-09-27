@@ -1,0 +1,141 @@
+{
+  "name": "LRC Extandator V6 Drop-in Patch",
+  "version": "6.0.0",
+  "files": [
+    {
+      "path": "APPLY_TO_REPO.cmd",
+      "size": 422,
+      "sha256": "b209a4d0b6f9e4dac31be337f1a336f225a639fa36e2334b7d74a807a6bc1547"
+    },
+    {
+      "path": "APPLY_TO_REPO.ps1",
+      "size": 1940,
+      "sha256": "6f0673ef32b41b15cffda3e1548332093372570d726779c213f360a8a328740b"
+    },
+    {
+      "path": "PATCH_README.txt",
+      "size": 899,
+      "sha256": "ca3d476106d7f13620456965ccf144c59fb8bca56b106240482059745a52b3f9"
+    },
+    {
+      "path": "README_V6.md",
+      "size": 8207,
+      "sha256": "d8471b726776fdef1b233216fdb85856f7b92911a96bb376a8aea06bd21cd37e"
+    },
+    {
+      "path": "alignment_cache.py",
+      "size": 4323,
+      "sha256": "42ac4025c50ab436c2a69d424964c7de1c6fbcdab28aa69678e8aa7d4b7048b9"
+    },
+    {
+      "path": "alignment_engine.py",
+      "size": 37047,
+      "sha256": "794fc76b9a555c24466a6115f5cec5bfa54429e2bd7cbd8520c896eda8a68fbf"
+    },
+    {
+      "path": "alignment_quality.py",
+      "size": 6632,
+      "sha256": "0d456abec3eb4242638fafb3d1f38079ac45cabaf313d724952750ad6f1b81b0"
+    },
+    {
+      "path": "app.py",
+      "size": 17427,
+      "sha256": "0b6ba48074b983a176551f001f865cfe07fd0d28d099bcce893e28225bd1d8aa"
+    },
+    {
+      "path": "benchmark.py",
+      "size": 9484,
+      "sha256": "6e5f031550e79ecc0b2f5699cc587a943d6390acd3de79d358cf0450ffcca2d4"
+    },
+    {
+      "path": "benchmarks/README.md",
+      "size": 2515,
+      "sha256": "26f57332fb07d0a883fce9c618a45932e444a7db2714cd5cbc729ea0c33cc082"
+    },
+    {
+      "path": "benchmarks/manifest.example.json",
+      "size": 405,
+      "sha256": "694f606d7f30476b7128bedd1995c62dd2ee4451c7630ff7a32acd6ebc907445"
+    },
+    {
+      "path": "install.bat",
+      "size": 314,
+      "sha256": "63054adaa4e485e4077413bee5880d70f4c6b786b256032a0de2f95a6a39fdac"
+    },
+    {
+      "path": "launcher.bat",
+      "size": 249,
+      "sha256": "e7417e110a084027a7c5cfaf11f333af825c7cc8dba7fd94bb4a0ebb1db772ec"
+    },
+    {
+      "path": "lrc_formats.py",
+      "size": 13789,
+      "sha256": "d37d985aa40c1d1e930789bac5346d54dca7191f79d3ee1751428c924c400c16"
+    },
+    {
+      "path": "lrc_maker.py",
+      "size": 23938,
+      "sha256": "2f59cee56e276999720c78746719995c4b7961a3347e2f671de4972f9b2352b2"
+    },
+    {
+      "path": "requirements-experimental.txt",
+      "size": 235,
+      "sha256": "13e0814a121c6c46c269c2f0408a07d5d5a7d1b1402ba767de185e6d45953f42"
+    },
+    {
+      "path": "requirements.txt",
+      "size": 88,
+      "sha256": "3734fef9238f4b8918f83243f2a3f20ab83afcc38fa2d96eaf8bc3568bb08f3b"
+    },
+    {
+      "path": "run.bat",
+      "size": 35,
+      "sha256": "fc7bf695901475cd2ef5b500fdf1a2c51bcf74cb5cf2498b6643f73300d79129"
+    },
+    {
+      "path": "run_tests.bat",
+      "size": 175,
+      "sha256": "01e2b98b1557f1c603656e5ac9cf95d932d3361bae4f092e802a6d2482518b94"
+    },
+    {
+      "path": "setup.bat",
+      "size": 34,
+      "sha256": "0222c69ae85178d614ff55440951e6c0e2aa70a08176164b4d9695843830e120"
+    },
+    {
+      "path": "start.ps1",
+      "size": 4693,
+      "sha256": "8e365ca0400c19c6ead71d337eca3edd4aa533a6ad5f3fcccfd07d43c5e33669"
+    },
+    {
+      "path": "static/v6-enhancer.css",
+      "size": 1418,
+      "sha256": "2fbafeadbd2519199c876394a7a8ffa09c677518d39cdeff19c7fdb36b9bfaea"
+    },
+    {
+      "path": "static/v6-enhancer.js",
+      "size": 6319,
+      "sha256": "ed9992baa58fc7fbcf5b5f38c900db9785730f2dd02d2b2c531989f488de40b4"
+    },
+    {
+      "path": "tests/test_alignment_quality.py",
+      "size": 1460,
+      "sha256": "b3955feb83d86e26f9d726d6b1782789113f9db77c609c5854e812db97c37179"
+    },
+    {
+      "path": "tests/test_anchor_alignment.py",
+      "size": 2395,
+      "sha256": "b186f2db22bed07c72e8a537d6f99ba4031e4c4090d198a90f119219b6ad6244"
+    },
+    {
+      "path": "tests/test_benchmark.py",
+      "size": 908,
+      "sha256": "e90b507925e2a5c3fe1bfc55be93519f9f515624029672c18c2e7a694998bb70"
+    },
+    {
+      "path": "tests/test_lrc_formats.py",
+      "size": 2025,
+      "sha256": "9360ae4e217ba6cb007c2cb4e658b0e6e292e43520d1ff96b524aa0c3b57c4b8"
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+
+    ╔═══════════════════════════════════════╗
+    ║   LRC STUDIO v5.0                    ║
+    ║   Полный ELRC + точный редактор      ║
+    ║   http://127.0.0.1:5000             ║
+    ╚═══════════════════════════════════════╝
+    
+ * Serving Flask app 'app'
+ * Debug mode: on
+17:14:27 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://172.18.0.1:5000
+17:14:27 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+17:36:20 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:36:20] "GET / HTTP/1.1" 200 -
+17:36:20 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:36:20] "[36mGET /static/script.js HTTP/1.1[0m" 304 -
+17:36:20 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:36:20] "[36mGET /static/style.css HTTP/1.1[0m" 304 -
+17:36:25 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:36:25] "GET /search?artist=Annisokay&title=Photographs&album=Devil+May+Care HTTP/1.1" 200 -
+17:36:30 - __main__ - INFO - 🚀 ===== НАЧАЛО ОБРАБОТКИ =====
+17:36:30 - __main__ - INFO - 📁 Файл: Annisokay - Photographs.mp3
+17:36:30 - lrc_maker - INFO - ✅ Using provided LRC: 38 lines
+17:36:30 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:36:30] "POST /upload HTTP/1.1" 200 -
+17:36:35 - lrc_maker - WARNING - ⚠️ https://lrclib.net/api/search failed: HTTPSConnectionPool(host='lrclib.net', port=443): Read timed out. (read timeout=10)
+17:36:40 - faster_whisper - INFO - Processing audio with duration 04:13.781
+17:36:48 - lrc_maker - INFO - ✅ Using large-v3 word timestamps with source LRC anchors
+17:36:48 - lrc_maker - INFO - 🚀 py-roller: D:\programming\LRC_Extandator\venv\Scripts\py-roller.exe run --stages s,f,t,p,a,w --audio D:\programming\LRC_Extandator\uploads\e67bb534ec66447fa994025e450c7c01_Annisokay_-_Photographs.mp3 --lyrics D:\programming\LRC_Extandator\temp\roller\lyrics_1789994208794.txt --language mul --splitter-demucs-device cuda --transcriber-device cuda --transcriber-compute-type float16 --transcriber-model-name C:\Users\kran\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3\snapshots\edaa852ec7e145841d8ffdb056a99866b5f0a478 --output-alignment-result D:\programming\LRC_Extandator\temp\roller\job_1789994208795\alignment.json --output-roller D:\programming\LRC_Extandator\temp\roller\job_1789994208795\out.lrc --intermediate D:\programming\LRC_Extandator\temp\roller\job_1789994208795\intermediate --cleanup never --log-level WARNING --aligner-repetition none --progress-format jsonl --output-format json
+17:36:50 - lrc_maker - INFO - 🎶 Instrumental breaks (проигрыши, только для логов): 00:22.07-00:30.64
+17:36:53 - lrc_maker - WARNING - ⚠️ https://api.betterlirics.xyz/lyrics failed: HTTPSConnectionPool(host='api.betterlirics.xyz', port=443): Max retries exceeded with url: /lyrics?track=Photographs&artist=Annisokay (Caused by NameResolutionError("HTTPSConnection(host='api.betterlirics.xyz', port=443): Failed to resolve 'api.betterlirics.xyz' ([Errno 11001] getaddrinfo failed)"))
+17:36:53 - lrc_maker - INFO - ℹ️ Musixmatch пропущен: не задан MUSIXMATCH_API_KEY
+17:40:32 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:40:32] "GET /search?artist=Flëur&title=Отречение&album=Эйфория HTTP/1.1" 200 -
+17:40:33 - lrc_maker - WARNING - ⚠️ https://lrclib.net/api/search failed: 503 Server Error: Service Unavailable for url: https://lrclib.net/api/search?artist_name=Fl%C3%ABur&track_name=%D0%9E%D1%82%D1%80%D0%B5%D1%87%D0%B5%D0%BD%D0%B8%D0%B5&album_name=%D0%AD%D0%B9%D1%84%D0%BE%D1%80%D0%B8%D1%8F
+17:40:36 - __main__ - INFO - 🚀 ===== НАЧАЛО ОБРАБОТКИ =====
+17:40:36 - __main__ - INFO - 📁 Файл: Flëur - Отречение.mp3
+17:40:36 - lrc_maker - INFO - ✅ Using provided LRC: 38 lines
+17:40:36 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:40:36] "POST /upload HTTP/1.1" 200 -
+17:40:42 - faster_whisper - INFO - Processing audio with duration 04:15.867
+17:40:45 - lrc_maker - WARNING - ⚠️ https://api.betterlirics.xyz/lyrics failed: HTTPSConnectionPool(host='api.betterlirics.xyz', port=443): Max retries exceeded with url: /lyrics?track=%D0%9E%D1%82%D1%80%D0%B5%D1%87%D0%B5%D0%BD%D0%B8%D0%B5&artist=Fl%C3%ABur (Caused by NameResolutionError("HTTPSConnection(host='api.betterlirics.xyz', port=443): Failed to resolve 'api.betterlirics.xyz' ([Errno 11001] getaddrinfo failed)"))
+17:40:45 - lrc_maker - INFO - ℹ️ Musixmatch пропущен: не задан MUSIXMATCH_API_KEY
+17:40:54 - lrc_maker - INFO - ✅ Using large-v3 word timestamps with source LRC anchors
+17:40:54 - lrc_maker - INFO - 🚀 py-roller: D:\programming\LRC_Extandator\venv\Scripts\py-roller.exe run --stages s,f,t,p,a,w --audio D:\programming\LRC_Extandator\uploads\1acadfc2100a459ca05c640f8aa73be0_Fleur_-_.mp3 --lyrics D:\programming\LRC_Extandator\temp\roller\lyrics_1789994454187.txt --language mul --splitter-demucs-device cuda --transcriber-device cuda --transcriber-compute-type float16 --transcriber-model-name C:\Users\kran\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3\snapshots\edaa852ec7e145841d8ffdb056a99866b5f0a478 --output-alignment-result D:\programming\LRC_Extandator\temp\roller\job_1789994454187\alignment.json --output-roller D:\programming\LRC_Extandator\temp\roller\job_1789994454187\out.lrc --intermediate D:\programming\LRC_Extandator\temp\roller\job_1789994454187\intermediate --cleanup never --log-level WARNING --aligner-repetition none --progress-format jsonl --output-format json
+17:40:55 - lrc_maker - INFO - 🎶 Instrumental breaks (проигрыши, только для логов): 03:34.28-03:40.82
+17:41:07 - __main__ - INFO - 🚀 ===== НАЧАЛО ОБРАБОТКИ =====
+17:41:07 - __main__ - INFO - 📁 Файл: Flëur - Отречение.mp3
+17:41:07 - lrc_maker - INFO - ✅ Using provided LRC: 40 lines
+17:41:07 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:41:07] "POST /upload HTTP/1.1" 200 -
+17:41:12 - faster_whisper - INFO - Processing audio with duration 04:15.867
+17:41:27 - lrc_maker - INFO - ✅ Using large-v3 word timestamps with source LRC anchors
+17:41:27 - lrc_maker - INFO - 🚀 py-roller: D:\programming\LRC_Extandator\venv\Scripts\py-roller.exe run --stages s,f,t,p,a,w --audio D:\programming\LRC_Extandator\uploads\caed3a70f13742b8a8418332897a06c3_Fleur_-_.mp3 --lyrics D:\programming\LRC_Extandator\temp\roller\lyrics_1789994487149.txt --language mul --splitter-demucs-device cuda --transcriber-device cuda --transcriber-compute-type float16 --transcriber-model-name C:\Users\kran\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3\snapshots\edaa852ec7e145841d8ffdb056a99866b5f0a478 --output-alignment-result D:\programming\LRC_Extandator\temp\roller\job_1789994487150\alignment.json --output-roller D:\programming\LRC_Extandator\temp\roller\job_1789994487150\out.lrc --intermediate D:\programming\LRC_Extandator\temp\roller\job_1789994487150\intermediate --cleanup never --log-level WARNING --aligner-repetition none --progress-format jsonl --output-format json
+17:41:28 - lrc_maker - INFO - 🎶 Instrumental breaks (проигрыши, только для логов): 01:00.22-01:17.18, 02:14.10-02:32.24
+17:43:27 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:43:27] "GET /search?artist=Annisokay&title=Life+Cycles&album=Enigmatic+Smile HTTP/1.1" 200 -
+17:43:35 - __main__ - INFO - 🚀 ===== НАЧАЛО ОБРАБОТКИ =====
+17:43:35 - __main__ - INFO - 📁 Файл: 08 Annisokay - Life Cycles.mp3
+17:43:35 - lrc_maker - INFO - ✅ Using provided LRC: 40 lines
+17:43:35 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:43:35] "POST /upload HTTP/1.1" 200 -
+17:43:39 - lrc_maker - WARNING - ⚠️ https://api.betterlirics.xyz/lyrics failed: HTTPSConnectionPool(host='api.betterlirics.xyz', port=443): Max retries exceeded with url: /lyrics?track=Life+Cycles&artist=Annisokay (Caused by NameResolutionError("HTTPSConnection(host='api.betterlirics.xyz', port=443): Failed to resolve 'api.betterlirics.xyz' ([Errno 11001] getaddrinfo failed)"))
+17:43:39 - lrc_maker - INFO - ℹ️ Musixmatch пропущен: не задан MUSIXMATCH_API_KEY
+17:43:40 - faster_whisper - INFO - Processing audio with duration 03:35.302
+17:43:48 - lrc_maker - INFO - ✅ Using large-v3 word timestamps with source LRC anchors
+17:43:48 - lrc_maker - INFO - 🚀 py-roller: D:\programming\LRC_Extandator\venv\Scripts\py-roller.exe run --stages s,f,t,p,a,w --audio D:\programming\LRC_Extandator\uploads\c1e05db0fc2449d591d39573323291c8_08_Annisokay_-_Life_Cycles.mp3 --lyrics D:\programming\LRC_Extandator\temp\roller\lyrics_1789994628679.txt --language mul --splitter-demucs-device cuda --transcriber-device cuda --transcriber-compute-type float16 --transcriber-model-name C:\Users\kran\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3\snapshots\edaa852ec7e145841d8ffdb056a99866b5f0a478 --output-alignment-result D:\programming\LRC_Extandator\temp\roller\job_1789994628680\alignment.json --output-roller D:\programming\LRC_Extandator\temp\roller\job_1789994628680\out.lrc --intermediate D:\programming\LRC_Extandator\temp\roller\job_1789994628680\intermediate --cleanup never --log-level WARNING --aligner-repetition none --progress-format jsonl --output-format json
+17:44:22 - __main__ - INFO - 🚀 ===== НАЧАЛО ОБРАБОТКИ =====
+17:44:22 - __main__ - INFO - 📁 Файл: 08 Annisokay - Life Cycles.mp3
+17:44:22 - lrc_maker - INFO - ✅ Using provided LRC: 40 lines
+17:44:22 - werkzeug - INFO - 127.0.0.1 - - [21/Sep/2026 17:44:22] "POST /upload HTTP/1.1" 200 -
+17:44:27 - faster_whisper - INFO - Processing audio with duration 03:35.302
+17:44:42 - lrc_maker - INFO - ✅ Using large-v3 word timestamps with source LRC anchors
+17:44:42 - lrc_maker - INFO - 🚀 py-roller: D:\programming\LRC_Extandator\venv\Scripts\py-roller.exe run --stages s,f,t,p,a,w --audio D:\programming\LRC_Extandator\uploads\d4bd86cc142a41e090a8099fb52f6128_08_Annisokay_-_Life_Cycles.mp3 --lyrics D:\programming\LRC_Extandator\temp\roller\lyrics_1789994682187.txt --language en --splitter-demucs-device cuda --transcriber-device cuda --transcriber-compute-type float16 --transcriber-model-name C:\Users\kran\.cache\huggingface\hub\models--Systran--faster-whisper-large-v3\snapshots\edaa852ec7e145841d8ffdb056a99866b5f0a478 --output-alignment-result D:\programming\LRC_Extandator\temp\roller\job_1789994682188\alignment.json --output-roller D:\programming\LRC_Extandator\temp\roller\job_1789994682188\out.lrc --intermediate D:\programming\LRC_Extandator\temp\roller\job_1789994682188\intermediate --cleanup never --log-level WARNING --aligner-repetition none --progress-format jsonl --output-format json
+17:44:43 - lrc_maker - INFO - 🎶 Instrumental breaks (проигрыши, только для логов): 01:08.59-01:13.52, 01:38.38-01:55.84, 02:38.26-02:43.40, 02:45.48-02:50.00

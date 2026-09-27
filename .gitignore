@@ -1,11 +1,14 @@
 lrc_env/
+.venv/
+venv/
 uploads/*
 downloads/*
 temp/
 separated/
-node_modules/
-venv/
+.cache/
 ffmpeg/
+node_modules/
 __pycache__/
 *.pyc
 *.log
+api-token.txt

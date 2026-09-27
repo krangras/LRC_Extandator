@@ -1,0 +1,8 @@
+# Experimental backends are intentionally separate from the production core.
+# Add one only when it beats the benchmark dataset, not because it sounds promising.
+ctc-forced-aligner
+uroman
+Unidecode
+nltk
+lyric-align[asr]
+openai-whisper

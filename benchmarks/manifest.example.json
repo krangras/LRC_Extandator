@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "name": "rock-clean-vocals-01",
+      "audio": "audio/track01.flac",
+      "lyrics": "lyrics/track01.lrc",
+      "reference": "reference/track01.elrc",
+      "language": "eng"
+    },
+    {
+      "name": "metal-scream-01",
+      "audio": "audio/track02.flac",
+      "lyrics": "lyrics/track02.lrc",
+      "reference": "reference/track02.elrc",
+      "language": "eng"
+    }
+  ]
+}

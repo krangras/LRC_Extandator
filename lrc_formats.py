@@ -1,23 +1,37 @@
-"""Parsing, validation and serialization for LRC and Enhanced LRC.
+"""LRC / Enhanced LRC parsing, validation and serialization.
 
-The project uses one internal model everywhere::
+V7 keeps one lossless internal representation everywhere::
 
-    {"start": float, "end": float, "text": str,
-     "words": [{"word": str, "start": float, "end": float}]}
+    {
+        "start": float,
+        "end": float,
+        "text": str,
+        "words": [
+            {
+                "word": str,
+                "start": float,
+                "end": float,
+                # Optional provenance produced by the alignment engine:
+                "confidence": float,
+                "origin": "aligned" | "anchor_shifted" | "interpolated" | ...,
+            }
+        ],
+        # Optional line-level provenance is preserved as well.
+        "confidence": float,
+        "method": str,
+    }
 
-Enhanced LRC timestamps mark the *start* of the following word.  A terminal
-inline timestamp is emitted as well, so the last word keeps its exact end when
-the file is imported again.  Players which ignore that final empty cue still
-remain compatible with the A2 Enhanced LRC representation.
+The old implementation repaired timings by rebuilding dictionaries and therefore
+silently discarded confidence/provenance metadata.  V7 repairs copies in-place
+and preserves unknown keys so the editor, benchmarker and Better Lyrics bridge
+can reason about alignment quality instead of receiving only pretty timestamps.
 """
-
 from __future__ import annotations
 
 import copy
 import math
 import re
 from typing import Any, Iterable
-
 
 TIME_BODY = r"(?P<minutes>\d{1,4}):(?P<seconds>[0-5]?\d)(?:[\.:](?P<fraction>\d{1,3}))?"
 LEADING_TIME_RE = re.compile(rf"^\s*\[(?P<time>{TIME_BODY})\]")
@@ -26,8 +40,15 @@ META_RE = re.compile(r"^\s*\[([A-Za-z][\w-]*):(.*)\]\s*$")
 SUPPORTED_META = ("ar", "ti", "al", "au", "lr", "length", "by", "re", "ve")
 
 
+def _number(value: Any, fallback: float) -> float:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return value if math.isfinite(value) else fallback
+
+
 def parse_time(value: str) -> float:
-    """Parse ``mm:ss``, ``mm:ss.xx`` or ``mm:ss.xxx`` into seconds."""
     match = re.fullmatch(r"\s*(\d{1,4}):([0-5]?\d)(?:[\.:](\d{1,3}))?\s*", value)
     if not match:
         raise ValueError(f"Некорректный таймкод: {value!r}")
@@ -37,7 +58,6 @@ def parse_time(value: str) -> float:
 
 
 def format_time(seconds: float, precision: int = 3) -> str:
-    """Format seconds as an LRC timestamp without brackets."""
     precision = max(2, min(int(precision), 3))
     value = max(0.0, _number(seconds, 0.0))
     scale = 10**precision
@@ -45,14 +65,6 @@ def format_time(seconds: float, precision: int = 3) -> str:
     minutes, remainder = divmod(total_units, 60 * scale)
     whole_seconds, fraction = divmod(remainder, scale)
     return f"{minutes:02d}:{whole_seconds:02d}.{fraction:0{precision}d}"
-
-
-def _number(value: Any, fallback: float) -> float:
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return fallback
-    return value if math.isfinite(value) else fallback
 
 
 def _parse_inline(content: str, line_start: float) -> tuple[str, list[dict[str, Any]], float | None]:
@@ -72,17 +84,32 @@ def _parse_inline(content: str, line_start: float) -> tuple[str, list[dict[str, 
         visible_parts.append(segment)
         cleaned = segment.strip()
         if cleaned:
-            words.append({"word": cleaned, "start": start, "end": None})
+            words.append(
+                {
+                    "word": cleaned,
+                    "start": start,
+                    "end": None,
+                    "confidence": 1.0,
+                    "origin": "imported_elrc",
+                }
+            )
         else:
             terminal = start
             if words and words[-1].get("end") is None and start > words[-1]["start"]:
                 words[-1]["end"] = start
 
-    # Text before the first inline cue is uncommon but valid.  Keep it visible
-    # and associate it with the line start so an import/export does not lose it.
     prefix_clean = prefix.strip()
     if prefix_clean:
-        words.insert(0, {"word": prefix_clean, "start": line_start, "end": None})
+        words.insert(
+            0,
+            {
+                "word": prefix_clean,
+                "start": line_start,
+                "end": None,
+                "confidence": 1.0,
+                "origin": "imported_elrc",
+            },
+        )
 
     text = " ".join(part.strip() for part in visible_parts if part.strip())
     for index, word in enumerate(words):
@@ -96,7 +123,11 @@ def _parse_inline(content: str, line_start: float) -> tuple[str, list[dict[str, 
 
 
 def parse_lyrics(text: str) -> dict[str, Any]:
-    """Parse plain, standard LRC, A2/foobar2000 Enhanced LRC and metadata."""
+    """Parse plain text, standard LRC, A2/foobar ELRC and metadata.
+
+    Standard LRC lines intentionally keep ``words=[]``.  The line timestamp is
+    an anchor, not fake word-level information.
+    """
     metadata: dict[str, str] = {}
     raw_lines: list[dict[str, Any]] = []
     plain_lines: list[str] = []
@@ -131,6 +162,10 @@ def parse_lyrics(text: str) -> dict[str, Any]:
                     "end": terminal,
                     "text": line_text,
                     "words": words,
+                    "anchor_start": line_start,
+                    "anchor_origin": "input_lrc",
+                    "confidence": 1.0 if words else 0.0,
+                    "method": "imported_elrc" if words else "input_lrc_anchor",
                 }
             )
 
@@ -139,21 +174,32 @@ def parse_lyrics(text: str) -> dict[str, Any]:
         shift = offset_ms / 1000.0
         for line in raw_lines:
             line["start"] += shift
+            line["anchor_start"] = line["start"]
             if line.get("end") is not None:
                 line["end"] += shift
             for word in line["words"]:
                 word["start"] += shift
                 if word.get("end") is not None:
                     word["end"] += shift
-        metadata.pop("offset", None)  # offset is now baked into the timings
+        metadata.pop("offset", None)
 
     raw_lines.sort(key=lambda item: item["start"])
-    lines, issues = repair_lines(raw_lines)
+    lines, issues = repair_lines(raw_lines, synthesize_word_times=False)
     return {"metadata": metadata, "lines": lines, "plain_lines": plain_lines, "issues": issues}
 
 
-def repair_lines(lines: Iterable[dict[str, Any]], duration: float | None = None) -> tuple[list[dict[str, Any]], list[str]]:
-    """Return a safe, monotonic copy of lyric lines plus human-readable issues."""
+def repair_lines(
+    lines: Iterable[dict[str, Any]],
+    duration: float | None = None,
+    *,
+    synthesize_word_times: bool = True,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Return a safe monotonic copy while preserving quality metadata.
+
+    ``synthesize_word_times=False`` is used while importing ordinary LRC.  It
+    deliberately avoids inventing ELRC data.  The alignment engine is the only
+    place that should synthesize missing word timings.
+    """
     repaired = copy.deepcopy(list(lines or []))
     issues: list[str] = []
     duration_value = _number(duration, 0.0) if duration is not None else None
@@ -174,53 +220,59 @@ def repair_lines(lines: Iterable[dict[str, Any]], duration: float | None = None)
         if fallback_end is None:
             fallback_end = duration_value if duration_value and duration_value > line["start"] else line["start"] + 4.0
         explicit_end = _number(line.get("end"), fallback_end)
-        line_end = max(line["start"] + 0.01, explicit_end)
+        line_end = max(line["start"] + 0.001, explicit_end)
         if next_start is not None:
-            line_end = min(line_end, max(line["start"] + 0.01, next_start))
+            line_end = min(line_end, max(line["start"] + 0.001, next_start))
 
-        words = line.get("words") or []
+        raw_words = line.get("words") or []
         clean_words: list[dict[str, Any]] = []
-        for word_index, word in enumerate(words):
+        for word_index, original_word in enumerate(raw_words):
+            word = copy.deepcopy(original_word)
             label = str(word.get("word") or "").strip()
             if not label:
                 issues.append(f"Строка {index + 1}: удалён пустой фрагмент")
                 continue
-            clean_words.append(
-                {
-                    "word": label,
-                    "start": word.get("start"),
-                    "end": word.get("end"),
-                }
-            )
+            word["word"] = label
+            clean_words.append(word)
 
         if clean_words:
-            available = max(0.05 * len(clean_words), line_end - line["start"])
-            step = available / len(clean_words)
-            previous_start = line["start"] - 0.001
-            for word_index, word in enumerate(clean_words):
-                fallback_start = line["start"] + step * word_index
-                word_start = max(line["start"], _number(word.get("start"), fallback_start))
-                if word_start < previous_start:
-                    issues.append(f"Строка {index + 1}, слово {word_index + 1}: исправлен порядок")
-                    word_start = previous_start + 0.001
-                word["start"] = round(word_start, 3)
-                previous_start = word_start
+            has_any_real_time = any(isinstance(w.get("start"), (int, float)) for w in clean_words)
+            if synthesize_word_times or has_any_real_time:
+                available = max(0.04 * len(clean_words), line_end - line["start"])
+                step = available / len(clean_words)
+                previous_start = line["start"] - 0.001
+                for word_index, word in enumerate(clean_words):
+                    fallback_start = line["start"] + step * word_index
+                    had_start = isinstance(word.get("start"), (int, float))
+                    word_start = max(line["start"], _number(word.get("start"), fallback_start))
+                    if word_start < previous_start:
+                        issues.append(f"Строка {index + 1}, слово {word_index + 1}: исправлен порядок")
+                        word_start = previous_start + 0.001
+                        word["origin"] = word.get("origin") or "repaired"
+                        word["confidence"] = min(_number(word.get("confidence"), 0.25), 0.25)
+                    if not had_start:
+                        word["origin"] = word.get("origin") or "interpolated"
+                        word["confidence"] = min(_number(word.get("confidence"), 0.12), 0.12)
+                    word["start"] = round(word_start, 3)
+                    previous_start = word_start
 
-            for word_index, word in enumerate(clean_words):
-                next_word_start = (
-                    clean_words[word_index + 1]["start"]
-                    if word_index + 1 < len(clean_words)
-                    else max(line_end, word["start"] + 0.05)
-                )
-                proposed_end = _number(word.get("end"), next_word_start)
-                # Word cues must never cross the next cue.  Gaps are allowed:
-                # they represent pauses between sung words.
-                max_end = max(word["start"] + 0.001, next_word_start)
-                word_end = min(max_end, max(word["start"] + 0.001, proposed_end))
-                word["end"] = round(word_end, 3)
+                for word_index, word in enumerate(clean_words):
+                    next_word_start = (
+                        clean_words[word_index + 1]["start"]
+                        if word_index + 1 < len(clean_words)
+                        else max(line_end, word["start"] + 0.04)
+                    )
+                    had_end = isinstance(word.get("end"), (int, float))
+                    proposed_end = _number(word.get("end"), next_word_start)
+                    max_end = max(word["start"] + 0.001, next_word_start)
+                    word_end = min(max_end, max(word["start"] + 0.001, proposed_end))
+                    if not had_end:
+                        word["origin"] = word.get("origin") or "interpolated"
+                        word["confidence"] = min(_number(word.get("confidence"), 0.12), 0.12)
+                    word["end"] = round(word_end, 3)
 
-            line["start"] = min(line["start"], clean_words[0]["start"])
-            line_end = max(line_end, clean_words[-1]["end"])
+                line["start"] = min(line["start"], clean_words[0]["start"])
+                line_end = max(line_end, clean_words[-1]["end"])
             line["text"] = " ".join(word["word"] for word in clean_words)
         else:
             line["text"] = str(line.get("text") or "").strip()
@@ -261,7 +313,6 @@ def serialize_elrc(
     precision: int = 3,
     terminal_timestamps: bool = True,
 ) -> str:
-    """Serialize A2 Enhanced LRC using timestamps before every word."""
     fixed, _ = repair_lines(lines)
     output = _metadata_lines(metadata)
     if output:
