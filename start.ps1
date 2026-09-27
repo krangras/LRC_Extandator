@@ -118,7 +118,7 @@ if ($Install) {
     Invoke-Checked $VenvPython @('-m','unittest','discover','-s','tests','-v')
 
     Write-Host ''
-    Write-Host 'Установка Forced Alignment v7.1 Boundary-Aware завершена.' -ForegroundColor Green
+    Write-Host 'Установка Forced Alignment v7.2 Adaptive Rescue завершена.' -ForegroundColor Green
     exit 0
 }
 

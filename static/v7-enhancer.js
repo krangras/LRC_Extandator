@@ -66,6 +66,9 @@
         <div><span>Interpolated</span><b id="v7QualityInterpolated">—</b></div>
         <div><span>Anchor MAE</span><b id="v7QualityAnchor">—</b></div>
         <div><span>Boundary rescue</span><b id="v7QualityBoundary">—</b></div>
+        <div><span>Adaptive rescue</span><b id="v7QualityAdaptive">—</b></div>
+        <div><span>Tempo fallback</span><b id="v7QualityTempo">—</b></div>
+        <div><span>Line switch</span><b id="v7QualitySwitch">—</b></div>
       </div>
       <div id="v7QualityNote" class="v7-quality-note"></div>`;
     result.prepend(card);
@@ -85,6 +88,9 @@
     document.getElementById('v7QualityInterpolated').textContent = `${Number(q.percent?.interpolated ?? ((q.interpolatedWordRatio ?? 0) * 100)).toFixed(1)}%`;
     document.getElementById('v7QualityAnchor').textContent = q.anchorMaeMs == null ? '—' : `${Math.round(q.anchorMaeMs)} ms`;
     document.getElementById('v7QualityBoundary').textContent = `${Number(q.boundaryRescues || 0)} / ${Number(q.boundaryWarnings || 0)} warn`;
+    document.getElementById('v7QualityAdaptive').textContent = `${Number(q.adaptiveRescues || 0)} lines`;
+    document.getElementById('v7QualityTempo').textContent = `${Number(q.tempoRescuedWords || 0)} words`;
+    document.getElementById('v7QualitySwitch').textContent = `${Number(q.lineSwitchReconciliations || 0)} fixed`;
     const selected = resultData.alignment?.selectedCandidate;
     const cache = resultData.alignment?.cacheHit ? ' · cache' : '';
     const candidate = selected ? ` · ${selected.label || (selected.use_demucs ? 'vocals/local-ctc' : 'mix/local-ctc')}` : '';

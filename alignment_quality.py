@@ -11,7 +11,7 @@ import math
 import statistics
 from typing import Any, Iterable
 
-QUALITY_SCHEMA_VERSION = 2
+QUALITY_SCHEMA_VERSION = 3
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -43,6 +43,10 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
     invalid_durations = 0
     boundary_warnings = 0
     boundary_rescues = 0
+    adaptive_rescues = 0
+    tempo_rescued_words = 0
+    line_switch_reconciliations = 0
+    line_switch_delays = 0
     last_word_confidences: list[float] = []
     line_diagnostics: list[dict[str, Any]] = []
 
@@ -74,6 +78,9 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
             if origin.startswith("interpolated"):
                 interpolated_words += 1
                 local_interpolated += 1
+            elif origin.startswith("tempo_"):
+                tempo_rescued_words += 1
+                repaired_words += 1
             elif origin.startswith("repaired"):
                 repaired_words += 1
             elif origin not in {"unknown", "synthetic"}:
@@ -102,6 +109,12 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
             boundary_warnings += 1
         if bool(line.get("boundary_rescue_used")):
             boundary_rescues += 1
+        if bool(line.get("adaptive_rescue_used")):
+            adaptive_rescues += 1
+        if bool(line.get("cross_line_reconciled")):
+            line_switch_reconciliations += 1
+        if bool(line.get("line_switch_delayed_for_previous")):
+            line_switch_delays += 1
 
         line_diagnostics.append(
             {
@@ -120,7 +133,15 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 "boundaryLeadMs": round(float(lead_ms), 1) if isinstance(lead_ms, (int, float)) else None,
                 "boundaryContextGapMs": round(float(context_gap_ms), 1) if isinstance(context_gap_ms, (int, float)) else None,
                 "boundaryRescueUsed": bool(line.get("boundary_rescue_used")),
+                "adaptiveRescueUsed": bool(line.get("adaptive_rescue_used")),
+                "adaptiveRescueReasons": list(line.get("adaptive_rescue_reasons") or []),
+                "tempoReconstructedWords": int(line.get("tempo_reconstructed_words") or 0),
                 "lookaheadWordsUsed": int(line.get("lookahead_words_used") or 0),
+                "displayStart": round(_num(line.get("display_start"), start), 3),
+                "lineSwitchShiftMs": round(_num(line.get("line_switch_shift_ms"), 0.0), 1),
+                "crossLineDisagreementMs": round(_num(line.get("cross_line_disagreement_ms"), 0.0), 1)
+                if line.get("cross_line_disagreement_ms") is not None
+                else None,
                 "boundaryWarning": local_boundary_warning,
             }
         )
@@ -128,6 +149,7 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
     aligned_ratio = aligned_words / total_words if total_words else 0.0
     interpolated_ratio = interpolated_words / total_words if total_words else 0.0
     repaired_ratio = repaired_words / total_words if total_words else 0.0
+    tempo_rescue_ratio = tempo_rescued_words / total_words if total_words else 0.0
     mean_word_conf = statistics.fmean(word_confidences) if word_confidences else 0.0
     mean_line_conf = statistics.fmean(line_confidences) if line_confidences else 0.0
     mean_last_word_conf = statistics.fmean(last_word_confidences) if last_word_confidences else 0.0
@@ -141,7 +163,10 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
         anchor_consistency = 0.75  # neutral when there is no trusted LRC anchor
 
     structural_penalty = min(0.35, non_monotonic * 0.035 + invalid_durations * 0.02)
-    interpolation_penalty = min(0.35, interpolated_ratio * 0.55 + repaired_ratio * 0.25)
+    interpolation_penalty = min(
+        0.38,
+        interpolated_ratio * 0.55 + repaired_ratio * 0.18 + tempo_rescue_ratio * 0.28,
+    )
     boundary_ratio = boundary_warnings / max(1, len(lines))
     boundary_penalty = min(0.18, boundary_ratio * 0.24)
 
@@ -185,6 +210,11 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "meanLastWordConfidence": round(mean_last_word_conf, 4),
         "boundaryWarnings": boundary_warnings,
         "boundaryRescues": boundary_rescues,
+        "adaptiveRescues": adaptive_rescues,
+        "tempoRescuedWords": tempo_rescued_words,
+        "tempoRescueRatio": round(tempo_rescue_ratio, 4),
+        "lineSwitchReconciliations": line_switch_reconciliations,
+        "lineSwitchDelays": line_switch_delays,
         "boundaryWarningRatio": round(boundary_ratio, 4),
         "anchorMaeMs": round(anchor_mae * 1000.0, 1) if anchor_mae is not None else None,
         "nonMonotonicViolations": non_monotonic,

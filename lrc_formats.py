@@ -156,9 +156,13 @@ def parse_lyrics(text: str) -> dict[str, Any]:
 
         for line_start in timestamps:
             line_text, words, terminal = _parse_inline(rest, line_start)
+            acoustic_start = min(
+                [line_start] + [float(word["start"]) for word in words if isinstance(word.get("start"), (int, float))]
+            ) if words else line_start
             raw_lines.append(
                 {
-                    "start": line_start,
+                    "start": acoustic_start,
+                    "display_start": line_start if words else None,
                     "end": terminal,
                     "text": line_text,
                     "words": words,
@@ -174,7 +178,9 @@ def parse_lyrics(text: str) -> dict[str, Any]:
         shift = offset_ms / 1000.0
         for line in raw_lines:
             line["start"] += shift
-            line["anchor_start"] = line["start"]
+            if isinstance(line.get("display_start"), (int, float)):
+                line["display_start"] += shift
+            line["anchor_start"] += shift
             if line.get("end") is not None:
                 line["end"] += shift
             for word in line["words"]:
@@ -214,7 +220,15 @@ def repair_lines(
         line["start"] = round(start, 3)
         previous_line_start = start
 
+    previous_display = -0.001
     for index, line in enumerate(repaired):
+        if isinstance(line.get("display_start"), (int, float)):
+            display_start = max(float(line["display_start"]), previous_display + 0.001)
+            line["display_start"] = round(display_start, 3)
+            previous_display = display_start
+        else:
+            previous_display = max(previous_display, float(line["start"]))
+
         next_start = repaired[index + 1]["start"] if index + 1 < len(repaired) else None
         fallback_end = next_start
         if fallback_end is None:
@@ -303,7 +317,10 @@ def serialize_lrc(lines: Iterable[dict[str, Any]], metadata: dict[str, Any] | No
     output = _metadata_lines(metadata)
     if output:
         output.append("")
-    output.extend(f"[{format_time(line['start'], precision)}]{line.get('text', '')}" for line in fixed)
+    output.extend(
+        f"[{format_time(line.get('display_start') if isinstance(line.get('display_start'), (int, float)) else line['start'], precision)}]{line.get('text', '')}"
+        for line in fixed
+    )
     return "\n".join(output)
 
 
@@ -318,7 +335,8 @@ def serialize_elrc(
     if output:
         output.append("")
     for line in fixed:
-        line_tag = f"[{format_time(line['start'], precision)}]"
+        switch_start = line.get("display_start") if isinstance(line.get("display_start"), (int, float)) else line["start"]
+        line_tag = f"[{format_time(switch_start, precision)}]"
         words = line.get("words") or []
         if not words:
             output.append(f"{line_tag}{line.get('text', '')}")

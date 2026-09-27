@@ -1,127 +1,165 @@
-# LRC Extandator — Forced Alignment v7.1 Boundary-Aware
+# LRC Extandator — Forced Alignment v7.2 Adaptive Rescue
 
 Локальный инструмент для превращения **уже синхронизированного построчного LRC** в пословный ELRC.
 
-Основа v7/v7.1: текст больше не распознаётся заново. Движок считает LRC известной истиной и решает только задачу **когда произнесено каждое известное слово**.
+V7.2 не распознаёт текст песни заново. Текст известен заранее, а движок решает только задачу **когда именно прозвучало каждое известное слово**.
 
-## Новый pipeline
+## Pipeline v7.2
 
 ```text
-аудио
-  +
-[00:42.100] Give me a reason to why I'm here
-[00:46.300] I've been so far from home
-  ↓
-локальное окно около 42.100…46.300 + overlap за следующий anchor
-  ↓
-MMS forced-alignment acoustic model
-  ↓
-CTC Viterbi: текущая строка + 1–3 служебных слова следующей строки
-  ↓
-проверка границы + узкий rescue-pass последнего слова
-  ↓
-word boundaries + confidence + origin
-  ↓
+аудио + timed LRC
+        ↓
+локальный CTC forced alignment каждой строки
+        ↓
+lookahead 1–3 слов следующей строки
+        ↓
+boundary-rescue последнего слова
+        ↓
+поиск подозрительных фраз внутри строки
+        ↓
+Adaptive Rescue:
+  1) tight re-anchor pass
+  2) wide-context pass
+  3) no-lookahead pass (max)
+        ↓
+word-level consensus между независимыми проходами
+        ↓
+только нестабильные слова:
+локальный темп + pronunciation mass + energy-onset fallback
+        ↓
+при тяжёлых участках в max/auto:
+Demucs vocals как независимый акустический кандидат
+        ↓
+сверка границы N → N+1 с обеих сторон
+        ↓
+отдельный display_start для корректного переключения строки
+        ↓
 ELRC
 ```
 
-В основном пути **нет ASR**. Если нет LRC с таймкодом у каждой строки, программа останавливается и просит синхронизированный LRC вместо угадывания текста песни.
+В основном пути **нет ASR**. Если нет LRC с таймкодом у каждой строки, программа останавливается и просит обычный синхронизированный LRC.
 
-## Что сохранено от последней рабочей версии
+## Главное в v7.2
 
-- прежний веб-интерфейс и ручной ELRC-редактор;
-- поиск LRC по провайдерам;
-- импорт/экспорт LRC и ELRC;
-- quality score, provenance и confidence;
-- persistent cache;
-- Demucs;
-- локальный API `/v1/align`;
-- benchmark-инструмент.
+### 1. Строка больше не обязана переключаться в момент первого подозрительного onset
 
-## Что изменилось
+Word timestamps остаются акустическими, но для строки дополнительно вычисляется `display_start`.
 
-- `Alignment Engine 7.1.0` использует `torchaudio.pipelines.MMS_FA` как acoustic model;
-- сам forced-alignment DP реализован внутри проекта (`ctc_viterbi_align`);
-- каждая строка анализируется в маленьком окне с overlap за следующий LRC-якорь;
-- первые 1–3 слова следующей строки добавляются только как CTC lookahead и затем удаляются из результата;
-- если последнее слово прилипло к следующему anchor или имеет слабую confidence, запускается отдельный короткий boundary-rescue;
-- в `max` boundary-rescue проверяет каждую межстрочную границу, а не только явно слабые строки;
-- если длинный lookahead не помещается, контекст автоматически уменьшается 3 → 2 → 1 → 0 без повторного инференса;
-- слабая строка получает максимум один расширенный retry;
-- Demucs в режиме `auto` запускается только при низком качестве первого прохода;
-- перед Demucs acoustic model выгружается из VRAM, что полезно для видеокарт на 6 GB;
-- результат слова хранит `confidence`, `origin` и нормализованную форму;
-- SSE отправляет heartbeat, поэтому интерфейс не выглядит зависшим во время тяжёлого этапа;
-- старый full-song candidate lattice удалён из основного pipeline.
+Он учитывает:
 
-## Windows / RTX 4050
+- конец последнего слова предыдущей строки;
+- lookahead предыдущей строки;
+- первое слово следующей строки;
+- confidence обоих наблюдений.
 
-Самый простой путь:
+Поэтому в ELRC может быть, например:
+
+```text
+[00:33.420]<00:33.180>They ...
+```
+
+Первое слово акустически началось в `33.180`, но одноактивный lyrics UI переключит строку в `33.420`, когда предыдущая фраза уже закончилась. Word timing при этом не уничтожается.
+
+### 2. Плохая средняя confidence больше не единственный триггер
+
+Строка отправляется в Adaptive Rescue, если обнаружено одно из событий:
+
+- очень слабое отдельное слово;
+- несколько слабых слов подряд;
+- интерполированное слово;
+- физически подозрительный локальный темп;
+- проблемная межстрочная граница.
+
+Одна плохая фраза больше не прячется за восемью хорошими словами.
+
+### 3. Несколько проходов действительно разные
+
+Детерминированный CTC нет смысла запускать три раза одинаково. Поэтому rescue использует разные условия:
+
+- **tight re-anchor** — узкое окно от уже найденного начала;
+- **wide context** — расширенное окно и больше контекста;
+- **no lookahead** — в `max`, чтобы проверить, не тянет ли следующая строка текущую фразу.
+
+После этого выбирается не «последний запуск», а word-level consensus.
+
+### 4. Темп — последний fallback, а не основной aligner
+
+Если слово стабильно найдено CTC, темп его не трогает.
+
+Если несколько проходов расходятся или confidence очень низкая, используются:
+
+- локальный темп соседних хороших строк;
+- длина романизованного слова как pronunciation mass;
+- уверенные соседние слова как anchors;
+- ближайший разумный energy onset в аудио.
+
+Такой результат получает `origin = tempo_energy_rescue` и пониженную confidence — система не делает вид, что это точное акустическое совпадение.
+
+### 5. Demucs теперь особенно нужен именно для тяжёлых участков
+
+В `max + auto`, если пришлось использовать tempo fallback или осталась реально слабая adaptive-фраза, запускается Demucs даже если средний score всей песни высокий.
+
+То есть одна сломанная строка больше не игнорируется только потому, что остальные 39 хорошие.
+
+## Режимы
+
+- **fast** — базовый forced alignment, минимум дополнительных проходов;
+- **balanced** — expanded retry + rescue явно плохих фраз;
+- **max** — boundary verification, 3 adaptive passes, consensus, tempo fallback и selective Demucs.
+
+Для RTX 4050 рекомендуется:
+
+```text
+Качество: max
+Demucs: auto
+```
+
+## Windows
 
 1. Распакуй архив в отдельную папку.
 2. Запусти `install.bat`.
-3. После установки запусти `run.bat`.
+3. Запусти `run.bat`.
 4. Откроется `http://127.0.0.1:5000`.
 
-Установщик принимает Python 3.10–3.14. При наличии NVIDIA GPU он ставит CUDA-сборку PyTorch; без NVIDIA — CPU-сборку.
-
-На первом `install.bat` модель forced alignment загружается и кэшируется. Это крупный файл, поэтому первый запуск заметно тяжелее последующих.
+Python: 3.10–3.14. При наличии NVIDIA установщик использует CUDA PyTorch.
 
 ### FFmpeg
 
-Для MP3/M4A/AAC/OGG рекомендуется `ffmpeg` в `PATH`. Также поддерживается структура:
+Рекомендуется `ffmpeg` в PATH. Также поддерживается:
 
 ```text
-LRC_Extandator_ForcedAlignment_v7_1/
+LRC_Extandator_ForcedAlignment_v7_2/
   ffmpeg/
     bin/
       ffmpeg.exe
       ffprobe.exe
 ```
 
-## Как подавать текст
+## Входной текст
 
-Правильно:
+Нужен timed LRC:
 
 ```text
 [00:31.250] I open my eyes and these lies
 [00:35.600] They breed and they feed off of me
 ```
 
-Недостаточно:
+Plain lyrics без timestamps намеренно не запускают распознавание текста.
 
-```text
-I open my eyes and these lies
-They breed and they feed off of me
-```
+## Quality diagnostics
 
-Во втором случае неизвестно даже приблизительное положение строк, а v7.1 намеренно не занимается распознаванием песни с нуля.
+V7.2 дополнительно возвращает:
 
-## Режимы качества
+- `adaptiveRescues`;
+- `tempoRescuedWords`;
+- `lineSwitchReconciliations`;
+- `lineSwitchDelays`;
+- `crossLineDisagreementMs`;
+- `adaptiveRescueReasons`;
+- `consensus_spread_ms` на слове;
+- `origin` и `confidence`.
 
-- **fast** — один проход по исходному mix, минимальные окна;
-- **balanced** — более широкие окна и retry слабых строк;
-- **max** — самый широкий overlap, 3-word lookahead, проверка каждой границы, rescue-pass и адаптивный Demucs.
-
-Для твоей RTX 4050 разумный дефолт — `max` + `Demucs: auto`.
-
-## Почему Demucs не запускается сразу
-
-Большинству строк достаточно исходного mix. Поэтому v7.1 сначала делает дешёвый CTC alignment. Если confidence/quality нормальные — на этом всё. Если нет — только тогда делается вокальный retry.
-
-Это уменьшает общее время и пиковую VRAM-нагрузку.
-
-## Проверка окружения
-
-```powershell
-.\.venv\Scripts\python.exe doctor.py
-```
-
-С предварительной загрузкой acoustic model:
-
-```powershell
-.\.venv\Scripts\python.exe doctor.py --preload
-```
+В интерфейсе эти значения показываются рядом с обычным alignment score.
 
 ## Тесты
 
@@ -129,38 +167,21 @@ They breed and they feed off of me
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-В текущей сборке есть тесты CTC Viterbi, повторяющихся символов, lookahead/backoff, boundary guard, last-word rescue, LRC-windowing, романизации известного текста, запрета plain-lyrics fallback, quality, benchmark-метрик и LRC/ELRC round-trip.
+Покрываются CTC Viterbi, repeated tokens, LRC anchors, lookahead/backoff, boundary rescue, adaptive consensus, tempo fallback, display-start reconciliation, ELRC round-trip и запрет ASR fallback.
 
 ## Benchmark
-
-Сравнить готовый ELRC с эталоном:
 
 ```powershell
 .\.venv\Scripts\python.exe benchmark.py score reference.elrc candidate.elrc
 ```
 
-Для batch benchmark `lyrics` в manifest теперь обязан быть **timed LRC**.
-
-## Форматы экспорта
-
-- точный ELRC с миллисекундами;
-- совместимый ELRC;
-- обычный LRC.
-
-Пример:
+## Основные файлы
 
 ```text
-[00:42.100]<00:42.100>Give <00:42.390>me <00:42.620>a <00:42.780>reason <00:43.410>to <00:43.620>why <00:43.910>I'm <00:44.250>here
-```
-
-## Ключевые файлы
-
-```text
-alignment_engine.py   — MMS + lookahead CTC Viterbi + boundary rescue + Demucs retry
-alignment_quality.py  — confidence/quality gate
-alignment_cache.py    — persistent alignment cache
-lrc_maker.py          — orchestration и LRC providers
-lrc_formats.py        — LRC/ELRC parser/export
-app.py                — web UI + local API + SSE
- doctor.py             — диагностика runtime
+alignment_engine.py   — CTC + boundary + adaptive multi-pass + tempo/energy fallback
+alignment_quality.py  — quality gate и diagnostics
+alignment_cache.py    — отдельный cache v7.2
+lrc_maker.py          — orchestration и providers
+lrc_formats.py        — parser/export + display_start
+app.py                — web UI / SSE / local API
 ```

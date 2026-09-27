@@ -28,6 +28,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -42,8 +43,8 @@ from alignment_cache import AlignmentCache
 from alignment_quality import compare_quality, quality_report
 from lrc_formats import repair_lines
 
-ALIGNMENT_ENGINE_VERSION = "7.1.0"
-BACKEND_NAME = "MMS_FA/custom-CTC-viterbi-boundary-aware"
+ALIGNMENT_ENGINE_VERSION = "7.2.0"
+BACKEND_NAME = "MMS_FA/custom-CTC-viterbi-adaptive-rescue"
 ProgressCallback = Callable[[int, str], None]
 
 # Application/UI language codes -> ISO-639-3 codes understood by uroman.
@@ -599,10 +600,23 @@ def _alignment_candidate_score(line: dict[str, Any]) -> float:
     last_word = next((w for w in reversed(words) if isinstance(w.get("start"), (int, float))), None)
     last_conf = float(last_word.get("confidence") or confidence) if last_word else confidence
 
-    # Do not let a high mean line confidence hide one broken final word.  This
-    # was a real v7 failure mode: 8 perfect words + one late last word still
-    # looked excellent when averaged.
-    score = 0.78 * confidence + 0.22 * last_conf
+    # Do not let a high mean hide one broken word. V7.2 scores the weakest
+    # internal phrase too, not only the final word.
+    confidences = [
+        float(word.get("confidence") or 0.0)
+        for word in words
+        if isinstance(word.get("start"), (int, float))
+    ]
+    median_conf = float(statistics.median(confidences)) if confidences else confidence
+    min_conf = min(confidences, default=confidence)
+    weak_ratio = sum(value < 0.45 for value in confidences) / max(1, len(confidences))
+    score = (
+        0.50 * confidence
+        + 0.18 * last_conf
+        + 0.20 * median_conf
+        + 0.12 * min_conf
+        - 0.16 * weak_ratio
+    )
     score -= min(0.22, delta * 0.055)
 
     lead_ms = line.get("boundary_lead_ms")
@@ -812,7 +826,7 @@ def _align_line_once(
     line_end = max(float(word["end"]) for word in words) if words else aligned_end
 
     # The old v7 cap was next_anchor + 350 ms.  That could cut off a sustained
-    # final word.  v7.1 uses the acoustically aligned next-line context as the
+    # final word.  v7.2 uses the acoustically aligned next-line context as the
     # natural right boundary.  Only when context is unavailable do we use the
     # (larger) configured overlap as a conservative hard cap.
     if lookahead_start is not None:
@@ -1059,6 +1073,545 @@ def _refine_last_word_boundary(
     return current
 
 
+def _word_units(word: dict[str, Any]) -> float:
+    """Approximate pronunciation mass for tempo fallback.
+
+    We intentionally keep this language-agnostic: MMS/uroman already stores a
+    romanized form per word.  Vowels receive a small extra weight because sung
+    vowels commonly carry most of a syllable's duration.
+    """
+    normalized = str(word.get("normalized") or "").lower()
+    if not normalized:
+        normalized = re.sub(r"[^a-z0-9]+", "", _deobfuscate_word(str(word.get("word") or "")).lower())
+    if not normalized:
+        return 1.0
+    vowels = sum(ch in "aeiouy" for ch in normalized)
+    return max(1.0, len(normalized) * 0.72 + vowels * 0.28)
+
+
+def _line_tempo_sec_per_unit(line: dict[str, Any]) -> float | None:
+    words = [w for w in (line.get("words") or []) if isinstance(w.get("start"), (int, float))]
+    if len(words) < 2 or float(line.get("confidence") or 0.0) < 0.45:
+        return None
+    start = float(words[0]["start"])
+    last = words[-1]
+    right = line.get("lookahead_start")
+    if not isinstance(right, (int, float)) or float(right) <= float(last["start"]):
+        right = last.get("end")
+    if not isinstance(right, (int, float)):
+        return None
+    span = float(right) - start
+    units = sum(_word_units(word) for word in words)
+    if span <= 0.08 or units <= 0:
+        return None
+    value = span / units
+    # Broad enough for rap and sustained vocals, narrow enough to reject pauses.
+    if not 0.018 <= value <= 0.42:
+        return None
+    return value
+
+
+def _tempo_prior_for_index(lines: list[dict[str, Any]], index: int, radius: int = 3) -> float | None:
+    local: list[float] = []
+    for distance in range(1, radius + 1):
+        for candidate_index in (index - distance, index + distance):
+            if not 0 <= candidate_index < len(lines):
+                continue
+            candidate = lines[candidate_index]
+            words = candidate.get("words") or []
+            if not words:
+                continue
+            bad = sum(
+                1 for word in words
+                if float(word.get("confidence") or 0.0) < 0.42
+                or str(word.get("origin") or "").startswith(("interpolated", "tempo_"))
+            )
+            if bad / max(1, len(words)) > 0.25:
+                continue
+            tempo = _line_tempo_sec_per_unit(candidate)
+            if tempo is not None:
+                local.append(tempo)
+    if local:
+        return float(statistics.median(local))
+
+    global_values = [value for line in lines if (value := _line_tempo_sec_per_unit(line)) is not None]
+    return float(statistics.median(global_values)) if global_values else None
+
+
+def _weighted_median(values: list[tuple[float, float]]) -> float:
+    if not values:
+        raise ValueError("weighted median requires values")
+    ordered = sorted((float(value), max(0.001, float(weight))) for value, weight in values)
+    total = sum(weight for _value, weight in ordered)
+    running = 0.0
+    for value, weight in ordered:
+        running += weight
+        if running >= total / 2.0:
+            return value
+    return ordered[-1][0]
+
+
+def _energy_onset_near(waveform: np.ndarray, predicted: float, radius: float = 0.095) -> float:
+    """Snap a fallback timestamp to a nearby positive energy transition.
+
+    This is deliberately only a *fallback* for words CTC could not place
+    consistently.  It never overrides a stable acoustic alignment.
+    """
+    sr = 16000
+    center = int(max(0.0, predicted) * sr)
+    left = max(0, center - int(radius * sr))
+    right = min(len(waveform), center + int(radius * sr))
+    segment = np.asarray(waveform[left:right], dtype=np.float32)
+    if segment.size < 640:
+        return predicted
+    frame = 320
+    hop = 160
+    energies: list[float] = []
+    positions: list[int] = []
+    for pos in range(0, max(1, segment.size - frame + 1), hop):
+        chunk = segment[pos:pos + frame]
+        if chunk.size < frame:
+            break
+        energies.append(float(np.sqrt(np.mean(chunk * chunk) + 1e-9)))
+        positions.append(pos)
+    if len(energies) < 3:
+        return predicted
+    log_energy = np.log(np.asarray(energies, dtype=np.float32) + 1e-6)
+    novelty = np.maximum(0.0, np.diff(log_energy, prepend=log_energy[0]))
+    best = int(np.argmax(novelty))
+    median = float(np.median(novelty))
+    strength = float(novelty[best])
+    if strength < median + 0.10:
+        return predicted
+    snapped = (left + positions[best]) / sr
+    # Avoid a dramatic jump caused by a drum transient at the search edge.
+    return snapped if abs(snapped - predicted) <= radius * 0.92 else predicted
+
+
+def _word_tempo_outliers(words: list[dict[str, Any]], tempo_prior: float | None, right_boundary: float | None) -> set[int]:
+    if tempo_prior is None or not words:
+        return set()
+    result: set[int] = set()
+    for index, word in enumerate(words):
+        if not isinstance(word.get("start"), (int, float)):
+            result.add(index)
+            continue
+        start = float(word["start"])
+        if index + 1 < len(words) and isinstance(words[index + 1].get("start"), (int, float)):
+            right = float(words[index + 1]["start"])
+        elif isinstance(right_boundary, (int, float)):
+            right = float(right_boundary)
+        elif isinstance(word.get("end"), (int, float)):
+            right = float(word["end"])
+        else:
+            continue
+        observed = right - start
+        expected = max(0.035, _word_units(word) * tempo_prior)
+        ratio = observed / expected
+        conf = float(word.get("confidence") or 0.0)
+        # High-confidence acoustic evidence is allowed to violate the tempo:
+        # a singer may sustain one vowel for a very long time. Tempo becomes a
+        # rescue signal only when the acoustic evidence is weak *and* the ratio
+        # is extreme.
+        if conf < 0.45 and (ratio < 0.22 or ratio > 3.40):
+            result.add(index)
+        elif conf < 0.62 and (ratio < 0.12 or ratio > 5.00):
+            result.add(index)
+    return result
+
+
+def _adaptive_line_reasons(
+    line: dict[str, Any],
+    *,
+    profile: AlignmentProfile,
+    tempo_prior: float | None,
+    next_anchor: float | None,
+) -> list[str]:
+    words = line.get("words") or []
+    if not words:
+        return ["no_words"]
+    confidences = [float(word.get("confidence") or 0.0) for word in words]
+    threshold = 0.48 if profile.name == "max" else 0.40
+    reasons: list[str] = []
+    low = [value < threshold for value in confidences]
+    if min(confidences, default=0.0) < (0.32 if profile.name == "max" else 0.26):
+        reasons.append("very_low_word_confidence")
+    if sum(low) / max(1, len(low)) >= (0.18 if profile.name == "max" else 0.28):
+        reasons.append("low_confidence_phrase")
+    if any(low[i] and low[i + 1] for i in range(len(low) - 1)):
+        reasons.append("consecutive_weak_words")
+    if any(str(word.get("origin") or "").startswith("interpolated") for word in words):
+        reasons.append("interpolated_word")
+    right_boundary = line.get("lookahead_start")
+    if not isinstance(right_boundary, (int, float)):
+        right_boundary = next_anchor
+    if _word_tempo_outliers(words, tempo_prior, right_boundary):
+        reasons.append("tempo_outlier")
+    if _boundary_is_suspicious(line, next_anchor=next_anchor, profile=profile):
+        reasons.append("boundary")
+    return reasons
+
+
+def _candidate_consensus(
+    candidates: list[dict[str, Any]],
+    *,
+    waveform: np.ndarray,
+    tempo_prior: float | None,
+    next_boundary: float | None,
+) -> dict[str, Any]:
+    """Merge several genuinely different CTC crops, then tempo-repair only uncertainty."""
+    if not candidates:
+        raise ValueError("No adaptive candidates")
+    base = max(candidates, key=_alignment_candidate_score)
+    merged = {**base, "words": [dict(word) for word in (base.get("words") or [])]}
+    words = merged["words"]
+    if not words:
+        return merged
+
+    unstable: set[int] = set()
+    consensus_used = 0
+    for index, word in enumerate(words):
+        observations: list[tuple[float, float, float, str]] = []
+        for candidate in candidates:
+            candidate_words = candidate.get("words") or []
+            if index >= len(candidate_words):
+                continue
+            item = candidate_words[index]
+            if not isinstance(item.get("start"), (int, float)):
+                continue
+            observations.append((
+                float(item["start"]),
+                float(item.get("confidence") or 0.0),
+                float(item.get("end") or item["start"]),
+                str(item.get("origin") or ""),
+            ))
+        if not observations:
+            unstable.add(index)
+            continue
+        starts = [value for value, _conf, _end, _origin in observations]
+        spread = max(starts) - min(starts)
+        best_obs = max(observations, key=lambda item: item[1])
+        median_start = _weighted_median([(value, 0.15 + conf * conf) for value, conf, _end, _origin in observations])
+        median_end = _weighted_median([(end, 0.15 + conf * conf) for _value, conf, end, _origin in observations])
+        mean_conf = float(statistics.fmean(conf for _value, conf, _end, _origin in observations))
+        word["consensus_spread_ms"] = round(spread * 1000.0, 1)
+        if len(observations) >= 2 and spread <= 0.155:
+            word["start"] = round(median_start, 3)
+            word["end"] = round(max(median_start + 0.01, median_end), 3)
+            word["confidence"] = round(min(0.97, mean_conf + 0.025), 4)
+            word["origin"] = "adaptive_consensus"
+            consensus_used += 1
+        else:
+            word["start"] = round(best_obs[0], 3)
+            word["end"] = round(max(best_obs[0] + 0.01, best_obs[2]), 3)
+            word["confidence"] = round(best_obs[1], 4)
+            word["origin"] = best_obs[3] or "adaptive_best_pass"
+            if spread > 0.240 or best_obs[1] < 0.36:
+                unstable.add(index)
+
+    unstable |= _word_tempo_outliers(words, tempo_prior, next_boundary)
+    unstable |= {
+        index for index, word in enumerate(words)
+        if float(word.get("confidence") or 0.0) < 0.31
+        or str(word.get("origin") or "").startswith("interpolated")
+    }
+
+    reconstructed = 0
+    if unstable and tempo_prior is not None:
+        reconstructed = _tempo_reconstruct_words(
+            words,
+            unstable=unstable,
+            waveform=waveform,
+            tempo_prior=tempo_prior,
+            line_start=float(merged.get("start") or words[0].get("start") or 0.0),
+            right_boundary=next_boundary,
+        )
+
+    # Rebuild safe end-times after per-word consensus/reconstruction.
+    previous = float(merged.get("start") or 0.0) - 0.001
+    for index, word in enumerate(words):
+        start = max(previous + 0.001, float(word.get("start") or previous + 0.02))
+        word["start"] = round(start, 3)
+        previous = start
+    for index, word in enumerate(words):
+        if index + 1 < len(words):
+            cap = float(words[index + 1]["start"])
+        elif isinstance(next_boundary, (int, float)) and float(next_boundary) > float(word["start"]):
+            cap = float(next_boundary)
+        else:
+            cap = max(float(word["start"]) + 0.04, float(word.get("end") or 0.0))
+        word["end"] = round(max(float(word["start"]) + 0.01, min(cap, float(word.get("end") or cap))), 3)
+
+    merged["start"] = round(float(words[0]["start"]), 3)
+    merged["end"] = round(max(float(word.get("end") or word["start"]) for word in words), 3)
+    merged["confidence"] = round(float(statistics.fmean(float(word.get("confidence") or 0.0) for word in words)), 4)
+    merged["adaptive_consensus_words"] = consensus_used
+    merged["tempo_reconstructed_words"] = reconstructed
+    return merged
+
+
+def _tempo_reconstruct_words(
+    words: list[dict[str, Any]],
+    *,
+    unstable: set[int],
+    waveform: np.ndarray,
+    tempo_prior: float,
+    line_start: float,
+    right_boundary: float | None,
+) -> int:
+    if not words or not unstable:
+        return 0
+    reconstructed = 0
+    sorted_indices = sorted(index for index in unstable if 0 <= index < len(words))
+    blocks: list[tuple[int, int]] = []
+    block_start = block_end = sorted_indices[0]
+    for index in sorted_indices[1:]:
+        if index == block_end + 1:
+            block_end = index
+        else:
+            blocks.append((block_start, block_end))
+            block_start = block_end = index
+    blocks.append((block_start, block_end))
+
+    for first, last in blocks:
+        left_word = words[first - 1] if first > 0 else None
+        right_word = words[last + 1] if last + 1 < len(words) else None
+        if left_word and isinstance(left_word.get("end"), (int, float)):
+            left = float(left_word["end"])
+        elif left_word and isinstance(left_word.get("start"), (int, float)):
+            left = float(left_word["start"]) + max(0.03, _word_units(left_word) * tempo_prior * 0.55)
+        else:
+            left = max(0.0, float(line_start))
+
+        if right_word and isinstance(right_word.get("start"), (int, float)):
+            right = float(right_word["start"])
+        elif isinstance(right_boundary, (int, float)):
+            right = float(right_boundary)
+        else:
+            right = left + sum(_word_units(words[i]) for i in range(first, last + 1)) * tempo_prior
+
+        block_units = [_word_units(words[i]) for i in range(first, last + 1)]
+        total_units = sum(block_units)
+        expected_span = max(0.04 * len(block_units), total_units * tempo_prior)
+        available = max(0.02 * len(block_units), right - left)
+
+        # Between two acoustic anchors the interval is authoritative. At a free
+        # edge use the learned tempo and leave any large silence untouched.
+        if left_word is not None and right_word is not None:
+            scale = available / max(total_units, 1e-6)
+        else:
+            scale = tempo_prior
+            if available < expected_span:
+                scale = available / max(total_units, 1e-6)
+
+        cumulative = 0.0
+        previous_start = left - 0.001
+        for offset, index in enumerate(range(first, last + 1)):
+            predicted = left + cumulative * scale
+            predicted = _energy_onset_near(waveform, predicted)
+            max_start = right - 0.012 * (last - index + 1)
+            predicted = max(previous_start + 0.012, min(predicted, max_start))
+            previous = dict(words[index])
+            words[index]["start"] = round(predicted, 3)
+            words[index]["confidence"] = round(min(0.44, max(0.24, float(previous.get("confidence") or 0.0) * 0.72 + 0.16)), 4)
+            words[index]["origin"] = "tempo_energy_rescue"
+            words[index]["rescue_previous_start"] = previous.get("start")
+            reconstructed += 1
+            cumulative += block_units[offset]
+            previous_start = predicted
+
+        for index in range(first, last + 1):
+            start = float(words[index]["start"])
+            if index + 1 < len(words):
+                end = float(words[index + 1]["start"])
+            else:
+                end = right
+            words[index]["end"] = round(max(start + 0.01, end), 3)
+    return reconstructed
+
+
+def _adaptive_rescue_line(
+    waveform: np.ndarray,
+    source_line: dict[str, Any],
+    next_line: dict[str, Any] | None,
+    next_anchor: float | None,
+    current: dict[str, Any],
+    *,
+    reasons: list[str],
+    tempo_prior: float | None,
+    language: str,
+    profile: AlignmentProfile,
+    model: Any,
+    token_dict: dict[str, int],
+    device: str,
+    romanizer: Any,
+) -> dict[str, Any]:
+    candidates = [current]
+    # Different crops/context deliberately change the acoustic evidence seen by
+    # MMS. Re-running the exact same deterministic emission would add no value.
+    variants: list[tuple[str, dict[str, Any], float, float, int]] = []
+    reanchor = float(current.get("start") or source_line.get("anchor_start") or source_line.get("start") or 0.0)
+    tight_source = dict(source_line)
+    tight_source["anchor_start"] = reanchor
+    tight_source["start"] = reanchor
+    variants.append((
+        "adaptive-tight-reanchor",
+        tight_source,
+        max(0.58, profile.pre_margin * 0.62),
+        max(1.00, profile.post_margin),
+        max(1, profile.lookahead_words),
+    ))
+    variants.append((
+        "adaptive-wide-context",
+        source_line,
+        profile.retry_pre_margin + (0.55 if profile.name == "max" else 0.30),
+        profile.retry_post_margin + (0.75 if profile.name == "max" else 0.40),
+        profile.lookahead_words + (1 if profile.name == "max" else 0),
+    ))
+    if profile.name == "max":
+        variants.append((
+            "adaptive-no-lookahead",
+            source_line,
+            profile.retry_pre_margin + 0.25,
+            profile.retry_post_margin + 0.95,
+            0,
+        ))
+
+    for label, variant_source, pre_margin, post_margin, lookahead in variants:
+        try:
+            candidate = _align_line_once(
+                waveform,
+                variant_source,
+                next_anchor,
+                next_line=next_line,
+                lookahead_words=lookahead,
+                language=language,
+                model=model,
+                token_dict=token_dict,
+                device=device,
+                pre_margin=pre_margin,
+                post_margin=post_margin,
+                last_line_window=profile.last_line_window + 4.0,
+                method_suffix=label,
+                romanizer=romanizer,
+            )
+            candidates.append(candidate)
+        except Exception:
+            continue
+
+    if len(candidates) == 1:
+        current["adaptive_rescue_checked"] = True
+        current["adaptive_rescue_used"] = False
+        current["adaptive_rescue_reasons"] = list(reasons)
+        current["adaptive_candidate_count"] = 1
+        return current
+
+    boundary = current.get("lookahead_start")
+    if not isinstance(boundary, (int, float)):
+        boundary = next_anchor
+    merged = _candidate_consensus(
+        candidates,
+        waveform=waveform,
+        tempo_prior=tempo_prior,
+        next_boundary=float(boundary) if isinstance(boundary, (int, float)) else None,
+    )
+    old_score = _alignment_candidate_score(current)
+    new_score = _alignment_candidate_score(merged)
+    changed = any(
+        str(word.get("origin") or "").startswith(("adaptive_", "tempo_"))
+        for word in (merged.get("words") or [])
+    )
+    # Consensus may lower raw confidence slightly while fixing a structurally
+    # impossible phrase, so reasons + reconstructed words can override a tiny
+    # score loss. Large degradations are rejected.
+    accept = new_score >= old_score - 0.025 and changed
+    if not accept:
+        current["adaptive_rescue_checked"] = True
+        current["adaptive_rescue_used"] = False
+        current["adaptive_rescue_reasons"] = list(reasons)
+        current["adaptive_candidate_count"] = len(candidates)
+        current["adaptive_score_delta"] = round(new_score - old_score, 4)
+        return current
+
+    merged["adaptive_rescue_checked"] = True
+    merged["adaptive_rescue_used"] = True
+    merged["adaptive_rescue_reasons"] = list(reasons)
+    merged["adaptive_candidate_count"] = len(candidates)
+    merged["adaptive_score_delta"] = round(new_score - old_score, 4)
+    merged["tempo_prior_ms_per_unit"] = round((tempo_prior or 0.0) * 1000.0, 2) if tempo_prior else None
+    merged["method"] = f"{merged.get('method') or BACKEND_NAME}+adaptive-rescue"
+    return merged
+
+
+def _reconcile_display_switches(lines: list[dict[str, Any]], profile: AlignmentProfile) -> list[dict[str, Any]]:
+    """Derive line-switch timestamps from both sides of every boundary.
+
+    Word timestamps remain acoustic. `display_start` is allowed to be later than
+    the first word when a single-line karaoke UI cannot display two genuinely
+    overlapping phrases at once. This fixes the visible 'jump to next line while
+    the previous line is still singing' without corrupting word alignment.
+    """
+    if not lines:
+        return lines
+    lines[0]["display_start"] = round(float(lines[0].get("start") or 0.0), 3)
+    previous_display = float(lines[0]["display_start"])
+    for index in range(1, len(lines)):
+        previous = lines[index - 1]
+        current = lines[index]
+        current_words = current.get("words") or []
+        previous_words = previous.get("words") or []
+        if not current_words or not previous_words:
+            current["display_start"] = round(float(current.get("start") or 0.0), 3)
+            continue
+        first = current_words[0]
+        last = previous_words[-1]
+        if not isinstance(first.get("start"), (int, float)) or not isinstance(last.get("start"), (int, float)):
+            current["display_start"] = round(float(current.get("start") or 0.0), 3)
+            continue
+        acoustic_start = float(first["start"])
+        previous_end = float(last.get("end") or last["start"])
+        lookahead = previous.get("lookahead_start")
+        lookahead_conf = float(previous.get("lookahead_confidence") or 0.0)
+        first_conf = float(first.get("confidence") or 0.0)
+        display = acoustic_start
+        disagreement_ms = None
+        if isinstance(lookahead, (int, float)):
+            lookahead = float(lookahead)
+            disagreement_ms = (acoustic_start - lookahead) * 1000.0
+            # Two independent observations of the next-line onset. If they
+            # agree, gently fuse them. If they disagree, trust the cleaner one.
+            if abs(acoustic_start - lookahead) <= 0.18:
+                display = _weighted_median([
+                    (acoustic_start, 0.20 + first_conf * first_conf),
+                    (lookahead, 0.20 + lookahead_conf * lookahead_conf),
+                ])
+            elif lookahead_conf >= first_conf + 0.06:
+                display = lookahead
+            elif acoustic_start < previous_end - 0.025 and lookahead >= previous_end - 0.035:
+                display = lookahead
+
+        overlap = previous_end - display
+        delayed_for_previous = False
+        if overlap > 0.025:
+            # In a one-active-line UI the previous lyric should finish before
+            # switching, unless both sides very confidently prove a real overlap.
+            real_overlap = first_conf >= 0.84 and lookahead_conf >= 0.84 and overlap <= 0.16
+            if not real_overlap:
+                if profile.name == "max":
+                    display = previous_end + 0.012
+                else:
+                    display = min(previous_end + 0.012, acoustic_start + 0.36)
+                delayed_for_previous = display > acoustic_start + 0.01
+
+        display = max(previous_display + 0.001, display)
+        current["display_start"] = round(max(0.0, display), 3)
+        previous_display = float(current["display_start"])
+        current["line_switch_shift_ms"] = round((display - acoustic_start) * 1000.0, 1)
+        current["cross_line_disagreement_ms"] = round(disagreement_ms, 1) if disagreement_ms is not None else None
+        current["cross_line_reconciled"] = abs(display - acoustic_start) >= 0.020
+        current["line_switch_delayed_for_previous"] = delayed_for_previous
+    return lines
+
 def _next_timed_line(source_lines: list[dict[str, Any]], index: int) -> tuple[dict[str, Any] | None, float | None]:
     for future in source_lines[index + 1:]:
         value = future.get("anchor_start")
@@ -1169,6 +1722,57 @@ def _align_lines(
             )
         result_map[index] = best
 
+    # Second stage: only suspicious phrases pay for multi-pass alignment.
+    # This is intentionally separate from the cheap first pass so an already
+    # clean song does not get 3-4x slower.
+    if retry_weak_lines and profile.name != "fast" and indices:
+        preliminary = [result_map[i] for i in indices]
+        adaptive_total = max(1, len(indices))
+        for local_pos, index in enumerate(indices):
+            current = result_map[index]
+            next_line, next_anchor = _next_timed_line(source_lines, index)
+            tempo_prior = _tempo_prior_for_index(preliminary, local_pos)
+            reasons = _adaptive_line_reasons(
+                current,
+                profile=profile,
+                tempo_prior=tempo_prior,
+                next_anchor=next_anchor,
+            )
+            # Balanced mode rescues only clearly bad phrases. Max mode also
+            # handles tempo/boundary inconsistencies that may still have a
+            # deceptively high average CTC confidence.
+            severe = any(reason in {
+                "very_low_word_confidence",
+                "consecutive_weak_words",
+                "interpolated_word",
+                "tempo_outlier",
+            } for reason in reasons)
+            if not reasons or reasons == ["boundary"] or (profile.name == "balanced" and not severe):
+                continue
+            if progress_callback:
+                pct = 92 + round((local_pos / adaptive_total) * 6)
+                progress_callback(
+                    pct,
+                    f"Adaptive rescue: строка {index + 1} ({', '.join(reasons[:3])})",
+                )
+            rescued = _adaptive_rescue_line(
+                waveform,
+                source_lines[index],
+                next_line,
+                next_anchor,
+                current,
+                reasons=reasons,
+                tempo_prior=tempo_prior,
+                language=language,
+                profile=profile,
+                model=model,
+                token_dict=token_dict,
+                device=device,
+                romanizer=romanizer,
+            )
+            result_map[index] = rescued
+            preliminary[local_pos] = rescued
+
     return [result_map[i] for i in indices]
 
 def _demucs_available() -> bool:
@@ -1188,7 +1792,7 @@ def _separate_vocals(
 ) -> tuple[str, tempfile.TemporaryDirectory[str]]:
     if not _demucs_available():
         raise RuntimeError("Demucs не установлен (это необязательный fallback)")
-    temp_dir = tempfile.TemporaryDirectory(prefix="lrc_extandator_v7_1_demucs_")
+    temp_dir = tempfile.TemporaryDirectory(prefix="lrc_extandator_v7_2_demucs_")
     output = Path(temp_dir.name)
     device = "cuda" if use_cuda else "cpu"
     if progress_callback:
@@ -1270,7 +1874,7 @@ def _validate_timed_lines(source_lines: list[dict[str, Any]]) -> None:
     if missing:
         preview = ", ".join(map(str, missing[:8])) + ("…" if len(missing) > 8 else "")
         raise ValueError(
-            "Forced Alignment v7.1 требует синхронизированный LRC с таймкодом каждой строки. "
+            "Forced Alignment v7.2 требует синхронизированный LRC с таймкодом каждой строки. "
             f"Нет таймкода у строк: {preview}. ASR намеренно не используется."
         )
 
@@ -1308,7 +1912,7 @@ class AlignmentEngine:
 
         started = time.perf_counter()
         if progress_callback:
-            progress_callback(1, "Forced Alignment v7.1: anchors → lookahead CTC → boundary rescue")
+            progress_callback(1, "Forced Alignment v7.2: CTC → boundary consensus → adaptive rescue → tempo fallback")
         waveform = decode_audio_16k_mono(audio_path, progress_callback)
         model, token_dict, device = _load_runtime(progress_callback)
         accel = detect_acceleration()
@@ -1333,6 +1937,7 @@ class AlignmentEngine:
                 progress_callback=(lambda p, m: progress_callback(10 + round(p * 0.68), m)) if progress_callback else None,
                 retry_weak_lines=options.retry_weak_lines,
             )
+            mix_lines = _reconcile_display_switches(mix_lines, profile)
             mix_lines, _issues = repair_lines(mix_lines, duration=len(waveform) / 16000.0)
             mix_quality = quality_report(mix_lines)
             mix_quality["runtimeSec"] = round(time.perf_counter() - started, 3)
@@ -1354,17 +1959,30 @@ class AlignmentEngine:
                     next_anchor=_next_anchor(source_lines, i),
                     profile=profile,
                 )
+                or int(line.get("tempo_reconstructed_words") or 0) > 0
+                or bool(line.get("adaptive_rescue_used"))
             }
             weak_ratio = len(weak_indices) / max(1, len(mix_lines))
+            hard_weak_indices = {
+                i for i, line in enumerate(mix_lines)
+                if int(line.get("tempo_reconstructed_words") or 0) > 0
+                or (
+                    bool(line.get("adaptive_rescue_used"))
+                    and min(
+                        [float(word.get("confidence") or 0.0) for word in (line.get("words") or [])] or [1.0]
+                    ) < 0.42
+                )
+            }
             if options.use_demucs == "auto" and profile.name != "fast":
                 should_demucs = (
                     float(mix_quality.get("score") or 0.0) < profile.demucs_trigger_score
                     or weak_ratio >= profile.demucs_trigger_weak_ratio
+                    or (profile.name == "max" and bool(hard_weak_indices))
                 )
 
         if should_demucs:
             if progress_callback:
-                progress_callback(80, "Низкая уверенность: один Demucs retry, без ASR")
+                progress_callback(80, "Слабые фразы: Demucs даёт независимый вокальный кандидат, без ASR")
             temp_handle: tempfile.TemporaryDirectory[str] | None = None
             try:
                 # The acoustic model is ~1.2 GB. Release it before Demucs on 6 GB cards.
@@ -1420,6 +2038,7 @@ class AlignmentEngine:
                     )
                     label = "vocals/local-ctc"
 
+                vocal_lines = _reconcile_display_switches(vocal_lines, profile)
                 vocal_lines, _issues = repair_lines(vocal_lines, duration=len(vocals_waveform) / 16000.0)
                 vocal_quality = quality_report(vocal_lines)
                 vocal_quality["runtimeSec"] = round(time.perf_counter() - started, 3)

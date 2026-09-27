@@ -693,7 +693,7 @@
             const div = document.createElement('div');
             div.className = 'line';
             div.dataset.index = idx;
-            div.dataset.start = line.start || 0;
+            div.dataset.start = (Number.isFinite(Number(line.display_start)) ? line.display_start : line.start) || 0;
 
             if (line.words && line.words.length > 0) {
                 line.words.forEach((w) => {
@@ -875,7 +875,8 @@
             return precision === 2 ? precise.slice(0, -1) : precise;
         };
         const body = editorLines.map((line, lineIdx) => {
-            const lineTag = `[${stamp(line.start)}]`;
+            const lineSwitch = Number.isFinite(Number(line.display_start)) ? line.display_start : line.start;
+            const lineTag = `[${stamp(lineSwitch)}]`;
             if (!line.words || !line.words.length) return lineTag + (line.text || '');
             const words = compatible
                 ? line.words.map(word => `<${stamp(word.start)}>${String(word.word || '').trim()}`).join(' ')
@@ -887,7 +888,10 @@
     }
 
     function generateSimpleLrcFromLines() {
-        const body = editorLines.map(line => `[${formatTimestamp(line.start)}]${line.words?.length ? line.words.map(w => w.word).join(' ') : (line.text || '')}`);
+        const body = editorLines.map(line => {
+            const lineSwitch = Number.isFinite(Number(line.display_start)) ? line.display_start : line.start;
+            return `[${formatTimestamp(lineSwitch)}]${line.words?.length ? line.words.map(w => w.word).join(' ') : (line.text || '')}`;
+        });
         const headers = metadataLines();
         return headers.length ? [...headers, '', ...body].join('\n') : body.join('\n');
     }
@@ -1126,13 +1130,13 @@
             lineTime.className = 'editor-input time-input'; lineTime.value = formatTimestamp(line.start); lineTime.title = 'Начало строки';
             lineTime.onchange = event => {
                 const value = parseTimestamp(event.target.value);
-                if (Number.isFinite(value)) mutateEditor(() => { line.start = roundMs(value); }, false);
+                if (Number.isFinite(value)) mutateEditor(() => { const oldStart = Number(line.start) || 0; line.start = roundMs(value); if (Number.isFinite(Number(line.display_start))) line.display_start = roundMs(Number(line.display_start) + line.start - oldStart); }, false);
                 else event.target.value = formatTimestamp(line.start);
             };
             const actions = document.createElement('div'); actions.className = 'editor-line-actions';
             actions.append(
                 button('▶', 'Прослушать строку', () => playRange(line.start, editorLineEnd(line, lineIdx))),
-                button('◎', 'Начало строки = текущая позиция', () => mutateEditor(() => { line.start = roundMs(editorAudio?.currentTime); })),
+                button('◎', 'Начало строки = текущая позиция', () => mutateEditor(() => { const oldStart = Number(line.start) || 0; line.start = roundMs(editorAudio?.currentTime); if (Number.isFinite(Number(line.display_start))) line.display_start = roundMs(Number(line.display_start) + line.start - oldStart); })),
                 button('＋ слово', 'Добавить слово', () => addWord(lineIdx)),
                 button('Разделить', 'Разделить перед выбранным словом', () => splitLine(lineIdx)),
                 button('✕', 'Удалить строку', () => { if (confirm(`Удалить строку ${lineIdx + 1}?`)) mutateEditor(() => editorLines.splice(lineIdx, 1)); }, 'word-btn del-btn')
@@ -1227,7 +1231,7 @@
             if (field === 'start') {
                 word.start = now;
                 if (!(Number(word.end) > now)) word.end = roundMs(now + .05);
-                if (wordIdx === 0) line.start = word.start;
+                if (wordIdx === 0) { line.start = word.start; if (Number(line.display_start) < word.start) line.display_start = word.start; }
                 const previous = line.words[wordIdx - 1];
                 if (previous && previous.end > now) previous.end = now;
             } else {
@@ -1306,6 +1310,7 @@
         if (!Number.isFinite(seconds) || seconds === 0) return;
         mutateEditor(() => editorLines.forEach(line => {
             line.start = roundMs(line.start + seconds); line.end = roundMs((line.end || line.start) + seconds);
+            if (Number.isFinite(Number(line.display_start))) line.display_start = roundMs(Number(line.display_start) + seconds);
             (line.words || []).forEach(word => { word.start = roundMs(word.start + seconds); word.end = roundMs(word.end + seconds); });
         }));
         document.getElementById('editorOffsetInput').value = 0;

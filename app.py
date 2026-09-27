@@ -460,7 +460,7 @@ if __name__ == "__main__":
     host = os.environ.get("LRC_STUDIO_HOST", "127.0.0.1")
     port = int(os.environ.get("LRC_STUDIO_PORT", "5000"))
     print(
-        f"\nLRC Studio / Extandator Forced Alignment V7\nhttp://{host}:{port}\n"
+        f"\nLRC Studio / Extandator Forced Alignment V7.2 Adaptive Rescue\nhttp://{host}:{port}\n"
         f"Local API token: {API_TOKEN}\n"
         "(token is also stored in .lrc_extandator/api-token.txt)\n"
     )

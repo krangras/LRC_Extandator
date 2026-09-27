@@ -41,6 +41,25 @@ class LrcFormatsTest(unittest.TestCase):
         self.assertEqual(fixed[0]["words"][0]["origin"], "aligned")
         self.assertAlmostEqual(fixed[0]["words"][0]["confidence"], 0.9)
 
+
+    def test_display_start_controls_line_tag_without_corrupting_word_time(self):
+        source = [
+            {
+                "start": 1.0, "end": 1.8, "display_start": 1.0, "text": "first",
+                "words": [{"word": "first", "start": 1.0, "end": 1.8, "confidence": 0.9, "origin": "aligned"}],
+            },
+            {
+                "start": 1.7, "end": 2.5, "display_start": 1.82, "text": "next",
+                "words": [{"word": "next", "start": 1.7, "end": 2.5, "confidence": 0.9, "origin": "aligned"}],
+            },
+        ]
+        output = build_outputs(source)["elrc"]
+        self.assertIn("[00:01.820]<00:01.700>next", output)
+        imported = parse_lyrics(output)["lines"][1]
+        self.assertAlmostEqual(imported["start"], 1.7)
+        self.assertAlmostEqual(imported["display_start"], 1.82)
+        self.assertAlmostEqual(imported["words"][0]["start"], 1.7)
+
     def test_offset_baked_into_anchor(self):
         parsed = parse_lyrics("[offset:-100]\n[00:01.000]word")
         self.assertEqual(parsed["lines"][0]["start"], 0.9)

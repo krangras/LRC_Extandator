@@ -7,6 +7,7 @@ import numpy as np
 from alignment_engine import (
     ctc_viterbi_align, _window_bounds, normalize_words, _align_line_once,
     _last_word_candidate_score, _boundary_is_suspicious, _refine_last_word_boundary, get_profile,
+    _reconcile_display_switches, _candidate_consensus, _adaptive_line_reasons,
 )
 from lrc_maker import generate_elrc
 
@@ -170,6 +171,63 @@ class ForcedAlignmentCoreTest(unittest.TestCase):
         self.assertEqual(result["words"][-1]["origin"], "aligned_boundary_rescue")
         self.assertAlmostEqual(result["words"][-1]["start"], 9.54)
         self.assertLess(result["boundary_rescue_delta_ms"], -400)
+
+
+    def test_display_switch_waits_for_previous_phrase_without_moving_word(self):
+        lines = [
+            {
+                "start": 9.0, "end": 10.28, "confidence": 0.9,
+                "lookahead_start": 10.24, "lookahead_confidence": 0.91,
+                "words": [{"word": "last", "start": 9.72, "end": 10.28, "confidence": 0.92, "origin": "aligned"}],
+            },
+            {
+                "start": 10.08, "end": 11.0, "confidence": 0.68,
+                "words": [
+                    {"word": "next", "start": 10.08, "end": 10.45, "confidence": 0.61, "origin": "aligned"},
+                    {"word": "line", "start": 10.52, "end": 11.0, "confidence": 0.8, "origin": "aligned"},
+                ],
+            },
+        ]
+        original_word_start = lines[1]["words"][0]["start"]
+        fixed = _reconcile_display_switches(lines, get_profile("max"))
+        self.assertEqual(fixed[1]["words"][0]["start"], original_word_start)
+        self.assertGreaterEqual(fixed[1]["display_start"], 10.24)
+        self.assertTrue(fixed[1]["cross_line_reconciled"])
+        self.assertTrue(fixed[1]["line_switch_delayed_for_previous"])
+
+    def test_adaptive_consensus_uses_tempo_only_for_unstable_word(self):
+        def candidate(second_start, second_conf):
+            return {
+                "start": 1.0, "end": 2.0, "confidence": 0.7, "anchor_delta_ms": 0.0,
+                "words": [
+                    {"word": "hello", "normalized": "hello", "start": 1.0, "end": 1.25, "confidence": 0.92, "origin": "aligned"},
+                    {"word": "world", "normalized": "world", "start": second_start, "end": min(2.0, second_start + 0.20), "confidence": second_conf, "origin": "aligned_low_confidence"},
+                ],
+            }
+        merged = _candidate_consensus(
+            [candidate(1.92, 0.22), candidate(1.48, 0.27), candidate(1.72, 0.24)],
+            waveform=np.zeros(3 * 16000, dtype=np.float32),
+            tempo_prior=0.075,
+            next_boundary=2.0,
+        )
+        self.assertEqual(merged["words"][0]["origin"], "adaptive_consensus")
+        self.assertEqual(merged["words"][1]["origin"], "tempo_energy_rescue")
+        self.assertEqual(merged["tempo_reconstructed_words"], 1)
+        self.assertLess(merged["words"][1]["start"], 1.6)
+
+    def test_adaptive_detector_flags_internal_tempo_outlier(self):
+        line = {
+            "start": 1.0, "end": 3.0, "confidence": 0.76, "lookahead_start": 3.0,
+            "words": [
+                {"word": "one", "normalized": "one", "start": 1.0, "end": 1.15, "confidence": 0.8, "origin": "aligned"},
+                {"word": "broken", "normalized": "broken", "start": 1.15, "end": 2.8, "confidence": 0.55, "origin": "aligned"},
+                {"word": "three", "normalized": "three", "start": 2.8, "end": 3.0, "confidence": 0.82, "origin": "aligned"},
+            ],
+        }
+        reasons = _adaptive_line_reasons(
+            line, profile=get_profile("max"), tempo_prior=0.055, next_anchor=3.0,
+        )
+        self.assertIn("tempo_outlier", reasons)
 
     def test_timed_lrc_reaches_forced_alignment_engine(self):
         aligned_line = {
