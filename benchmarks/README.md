@@ -1,4 +1,4 @@
-# Эталонный датасет Forced Alignment v7
+# Эталонный датасет Forced Alignment v7.1
 
 Benchmark измеряет весь LRC → ELRC pipeline на фиксированном наборе песен.
 
@@ -8,7 +8,7 @@ Benchmark измеряет весь LRC → ELRC pipeline на фиксиров�
 - `lyrics/...` — **синхронизированный построчный LRC**;
 - `reference/...` — вручную доведённый ELRC ground truth.
 
-Plain lyrics здесь больше не используются: задача v7 — forced alignment известного текста внутри известных LRC-якорей.
+Plain lyrics здесь больше не используются: задача v7.1 — forced alignment известного текста внутри известных LRC-якорей.
 
 Метрики:
 

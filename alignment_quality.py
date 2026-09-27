@@ -11,7 +11,7 @@ import math
 import statistics
 from typing import Any, Iterable
 
-QUALITY_SCHEMA_VERSION = 1
+QUALITY_SCHEMA_VERSION = 2
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -41,6 +41,9 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
     anchor_deltas: list[float] = []
     non_monotonic = 0
     invalid_durations = 0
+    boundary_warnings = 0
+    boundary_rescues = 0
+    last_word_confidences: list[float] = []
     line_diagnostics: list[dict[str, Any]] = []
 
     previous_line_start = -1.0
@@ -85,6 +88,21 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 invalid_durations += 1
             prev_word_start = max(prev_word_start, ws)
 
+        last_word_conf = local_conf[-1] if local_conf else 0.0
+        if local_conf:
+            last_word_confidences.append(last_word_conf)
+        lead_ms = line.get("boundary_lead_ms")
+        context_gap_ms = line.get("boundary_context_gap_ms")
+        local_boundary_warning = False
+        if isinstance(lead_ms, (int, float)) and float(lead_ms) < 25.0:
+            local_boundary_warning = True
+        if isinstance(context_gap_ms, (int, float)) and float(context_gap_ms) < 45.0:
+            local_boundary_warning = True
+        if local_boundary_warning:
+            boundary_warnings += 1
+        if bool(line.get("boundary_rescue_used")):
+            boundary_rescues += 1
+
         line_diagnostics.append(
             {
                 "line": index + 1,
@@ -94,10 +112,16 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
                 "alignedWords": local_aligned,
                 "interpolatedWords": local_interpolated,
                 "meanWordConfidence": round(statistics.fmean(local_conf), 4) if local_conf else 0.0,
+                "lastWordConfidence": round(last_word_conf, 4),
                 "method": line.get("method") or "unknown",
                 "anchorDeltaMs": round(_num(line.get("anchor_delta_ms"), 0.0), 1)
                 if line.get("anchor_delta_ms") is not None
                 else None,
+                "boundaryLeadMs": round(float(lead_ms), 1) if isinstance(lead_ms, (int, float)) else None,
+                "boundaryContextGapMs": round(float(context_gap_ms), 1) if isinstance(context_gap_ms, (int, float)) else None,
+                "boundaryRescueUsed": bool(line.get("boundary_rescue_used")),
+                "lookaheadWordsUsed": int(line.get("lookahead_words_used") or 0),
+                "boundaryWarning": local_boundary_warning,
             }
         )
 
@@ -106,6 +130,7 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
     repaired_ratio = repaired_words / total_words if total_words else 0.0
     mean_word_conf = statistics.fmean(word_confidences) if word_confidences else 0.0
     mean_line_conf = statistics.fmean(line_confidences) if line_confidences else 0.0
+    mean_last_word_conf = statistics.fmean(last_word_confidences) if last_word_confidences else 0.0
 
     if anchor_deltas:
         anchor_mae = statistics.fmean(anchor_deltas)
@@ -117,14 +142,18 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
 
     structural_penalty = min(0.35, non_monotonic * 0.035 + invalid_durations * 0.02)
     interpolation_penalty = min(0.35, interpolated_ratio * 0.55 + repaired_ratio * 0.25)
+    boundary_ratio = boundary_warnings / max(1, len(lines))
+    boundary_penalty = min(0.18, boundary_ratio * 0.24)
 
     score = (
-        0.38 * aligned_ratio
-        + 0.28 * mean_word_conf
-        + 0.20 * mean_line_conf
+        0.34 * aligned_ratio
+        + 0.24 * mean_word_conf
+        + 0.16 * mean_line_conf
+        + 0.12 * mean_last_word_conf
         + 0.14 * anchor_consistency
         - structural_penalty
         - interpolation_penalty
+        - boundary_penalty
     )
     score = _clamp01(score)
 
@@ -153,6 +182,10 @@ def quality_report(lines: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "interpolatedWordRatio": round(interpolated_ratio, 4),
         "meanWordConfidence": round(mean_word_conf, 4),
         "meanLineConfidence": round(mean_line_conf, 4),
+        "meanLastWordConfidence": round(mean_last_word_conf, 4),
+        "boundaryWarnings": boundary_warnings,
+        "boundaryRescues": boundary_rescues,
+        "boundaryWarningRatio": round(boundary_ratio, 4),
         "anchorMaeMs": round(anchor_mae * 1000.0, 1) if anchor_mae is not None else None,
         "nonMonotonicViolations": non_monotonic,
         "invalidWordDurations": invalid_durations,

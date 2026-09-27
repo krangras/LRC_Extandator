@@ -42,8 +42,8 @@ from alignment_cache import AlignmentCache
 from alignment_quality import compare_quality, quality_report
 from lrc_formats import repair_lines
 
-ALIGNMENT_ENGINE_VERSION = "7.0.0"
-BACKEND_NAME = "MMS_FA/custom-CTC-viterbi"
+ALIGNMENT_ENGINE_VERSION = "7.1.0"
+BACKEND_NAME = "MMS_FA/custom-CTC-viterbi-boundary-aware"
 ProgressCallback = Callable[[int, str], None]
 
 # Application/UI language codes -> ISO-639-3 codes understood by uroman.
@@ -87,44 +87,68 @@ class AlignmentProfile:
     anchor_retry_delta: float
     demucs_trigger_score: float
     demucs_trigger_weak_ratio: float
+    lookahead_words: int
+    boundary_confidence_threshold: float
+    boundary_danger_zone: float
+    boundary_rescue_pre_margin: float
+    boundary_rescue_post_margin: float
+    boundary_refine_all: bool
 
 
 PROFILES: dict[str, AlignmentProfile] = {
     "fast": AlignmentProfile(
         name="fast",
         pre_margin=0.65,
-        post_margin=0.20,
+        post_margin=0.45,
         last_line_window=9.0,
-        retry_pre_margin=0.65,
-        retry_post_margin=0.20,
+        retry_pre_margin=0.85,
+        retry_post_margin=0.70,
         weak_line_threshold=0.42,
         anchor_retry_delta=1.10,
         demucs_trigger_score=0.0,
         demucs_trigger_weak_ratio=2.0,
+        lookahead_words=1,
+        boundary_confidence_threshold=0.34,
+        boundary_danger_zone=0.14,
+        boundary_rescue_pre_margin=0.70,
+        boundary_rescue_post_margin=0.80,
+        boundary_refine_all=False,
     ),
     "balanced": AlignmentProfile(
         name="balanced",
         pre_margin=0.95,
-        post_margin=0.35,
+        post_margin=0.85,
         last_line_window=11.0,
         retry_pre_margin=1.65,
-        retry_post_margin=0.65,
+        retry_post_margin=1.15,
         weak_line_threshold=0.50,
         anchor_retry_delta=0.95,
         demucs_trigger_score=0.78,
         demucs_trigger_weak_ratio=0.22,
+        lookahead_words=2,
+        boundary_confidence_threshold=0.46,
+        boundary_danger_zone=0.22,
+        boundary_rescue_pre_margin=0.95,
+        boundary_rescue_post_margin=1.15,
+        boundary_refine_all=False,
     ),
     "max": AlignmentProfile(
         name="max",
         pre_margin=1.25,
-        post_margin=0.50,
+        post_margin=1.20,
         last_line_window=13.0,
         retry_pre_margin=2.20,
-        retry_post_margin=0.90,
+        retry_post_margin=1.55,
         weak_line_threshold=0.56,
         anchor_retry_delta=0.80,
         demucs_trigger_score=0.84,
         demucs_trigger_weak_ratio=0.14,
+        lookahead_words=3,
+        boundary_confidence_threshold=0.54,
+        boundary_danger_zone=0.30,
+        boundary_rescue_pre_margin=1.20,
+        boundary_rescue_post_margin=1.45,
+        boundary_refine_all=True,
     ),
 }
 
@@ -571,8 +595,60 @@ def _interpolate_missing_words(words: list[dict[str, Any]], line_start: float, l
 def _alignment_candidate_score(line: dict[str, Any]) -> float:
     confidence = float(line.get("confidence") or 0.0)
     delta = abs(float(line.get("anchor_delta_ms") or 0.0)) / 1000.0
-    # Acoustic evidence dominates; anchor proximity acts as a conservative prior.
-    return confidence - min(0.22, delta * 0.055)
+    words = line.get("words") or []
+    last_word = next((w for w in reversed(words) if isinstance(w.get("start"), (int, float))), None)
+    last_conf = float(last_word.get("confidence") or confidence) if last_word else confidence
+
+    # Do not let a high mean line confidence hide one broken final word.  This
+    # was a real v7 failure mode: 8 perfect words + one late last word still
+    # looked excellent when averaged.
+    score = 0.78 * confidence + 0.22 * last_conf
+    score -= min(0.22, delta * 0.055)
+
+    lead_ms = line.get("boundary_lead_ms")
+    if isinstance(lead_ms, (int, float)):
+        if float(lead_ms) < -80.0:
+            score -= 0.28
+        elif float(lead_ms) < 30.0:
+            score -= 0.12
+    context_gap_ms = line.get("boundary_context_gap_ms")
+    if isinstance(context_gap_ms, (int, float)):
+        if float(context_gap_ms) <= 0.0:
+            score -= 0.30
+        elif float(context_gap_ms) < 55.0:
+            score -= 0.10
+    return score
+
+
+def _first_context_words(source_line: dict[str, Any] | None, count: int) -> str:
+    if not source_line or count <= 0:
+        return ""
+    parts = [part for part in re.findall(r"\S+", str(source_line.get("text") or "")) if part.strip()]
+    return " ".join(parts[:count])
+
+
+def _lookahead_diagnostics(
+    token_spans: list[dict[str, Any]],
+    *,
+    current_token_count: int,
+    lookahead_words_normalized: list[NormalizedWord],
+    window_start: float,
+    frame_sec: float,
+) -> tuple[float | None, float | None]:
+    """Return the acoustic start/confidence of the first alignable lookahead word."""
+    for item in lookahead_words_normalized:
+        if item.token_start is None or item.token_end is None:
+            continue
+        spans = token_spans[
+            current_token_count + item.token_start : current_token_count + item.token_end
+        ]
+        if not spans:
+            continue
+        first = spans[0]
+        start = window_start + float(first["start_frame"]) * frame_sec
+        confidence = float(np.mean([float(span["confidence"]) for span in spans]))
+        return round(start, 3), round(max(0.0, min(1.0, confidence)), 4)
+    return None, None
 
 
 def _align_line_once(
@@ -580,6 +656,8 @@ def _align_line_once(
     source_line: dict[str, Any],
     next_anchor: float | None,
     *,
+    next_line: dict[str, Any] | None,
+    lookahead_words: int,
     language: str,
     model: Any,
     token_dict: dict[str, int],
@@ -590,6 +668,13 @@ def _align_line_once(
     method_suffix: str,
     romanizer: Any,
 ) -> dict[str, Any]:
+    """Align one known line, optionally appending words from the next line.
+
+    The appended words are *context only*.  They force CTC to explain the
+    acoustic transition into the next lyric line instead of being free to push
+    the last word of the current line against the right edge of the window.
+    Only current-line words are returned to the caller.
+    """
     anchor_raw = source_line.get("anchor_start")
     if not isinstance(anchor_raw, (int, float)):
         anchor_raw = source_line.get("start")
@@ -607,11 +692,20 @@ def _align_line_once(
     )
 
     text = str(source_line.get("text") or "").strip()
-    normalized_words, target = normalize_words(text, language, romanizer)
+    normalized_words, current_target = normalize_words(text, language, romanizer)
     if not normalized_words:
         raise ValueError("Пустая строка текста")
-    if not target:
-        # No alignable characters: preserve anchor and distribute conservatively.
+
+    requested_context_words = max(0, int(lookahead_words)) if next_anchor is not None else 0
+    context_text = _first_context_words(next_line, requested_context_words) if requested_context_words else ""
+    lookahead_normalized: list[NormalizedWord] = []
+    lookahead_target = ""
+    if context_text:
+        lookahead_normalized, lookahead_target = normalize_words(context_text, language, romanizer)
+
+    if not current_target:
+        # No alignable characters: preserve the LRC anchor and distribute only
+        # the unsupported visible tokens.  No recognition is attempted.
         synthetic_end = next_anchor if next_anchor and next_anchor > anchor else min(duration, anchor + 1.5)
         words = [
             {"word": item.display, "start": None, "end": None, "confidence": 0.0, "origin": "missing"}
@@ -630,16 +724,54 @@ def _align_line_once(
             "anchor_delta_ms": 0.0,
             "window_start": round(window_start, 3),
             "window_end": round(window_end, 3),
+            "lookahead_text": context_text or None,
+            "lookahead_start": None,
+            "lookahead_confidence": None,
+            "lookahead_words_requested": requested_context_words,
+            "lookahead_words_used": 0,
         }
 
-    try:
-        target_ids = [token_dict[ch] for ch in target]
-    except KeyError as exc:
-        raise RuntimeError(f"MMS_FA alphabet unexpectedly lacks {exc.args[0]!r}") from exc
-
     log_probs = _emission_for_window(waveform, window_start, window_end, model=model, device=device)
-    token_spans = ctc_viterbi_align(log_probs, target_ids, blank_id=token_dict["-"])
+
+    # Long next-line phrases sometimes do not physically fit into the configured
+    # overlap.  Do not fail the current line because of optional context: reuse
+    # the same acoustic emission and back off 3 -> 2 -> 1 -> 0 context words.
+    token_spans: list[dict[str, Any]] | None = None
+    alignment_error: Exception | None = None
+    used_context_words = requested_context_words
+    for context_count in range(requested_context_words, -1, -1):
+        context_text = _first_context_words(next_line, context_count) if context_count else ""
+        if context_text:
+            lookahead_normalized, lookahead_target = normalize_words(context_text, language, romanizer)
+        else:
+            lookahead_normalized, lookahead_target = [], ""
+        full_target = current_target + lookahead_target
+        try:
+            target_ids = [token_dict[ch] for ch in full_target]
+        except KeyError as exc:
+            raise RuntimeError(f"MMS_FA alphabet unexpectedly lacks {exc.args[0]!r}") from exc
+        try:
+            token_spans = ctc_viterbi_align(log_probs, target_ids, blank_id=token_dict["-"])
+            used_context_words = context_count
+            break
+        except RuntimeError as exc:
+            alignment_error = exc
+            continue
+    if token_spans is None:
+        raise alignment_error or RuntimeError("CTC path не найден")
+
     frame_sec = (window_end - window_start) / max(1, log_probs.shape[0])
+
+    # We intentionally discard the appended next-line context from the visible
+    # result after it has constrained the CTC path.
+    current_spans = token_spans[: len(current_target)]
+    lookahead_start, lookahead_confidence = _lookahead_diagnostics(
+        token_spans,
+        current_token_count=len(current_target),
+        lookahead_words_normalized=lookahead_normalized,
+        window_start=window_start,
+        frame_sec=frame_sec,
+    )
 
     words: list[dict[str, Any]] = []
     aligned_confidences: list[float] = []
@@ -654,7 +786,7 @@ def _align_line_once(
                 "normalized": item.chars,
             })
             continue
-        spans = token_spans[item.token_start:item.token_end]
+        spans = current_spans[item.token_start:item.token_end]
         first = spans[0]
         last = spans[-1]
         start = window_start + float(first["start_frame"]) * frame_sec
@@ -678,16 +810,35 @@ def _align_line_once(
 
     line_start = float(words[0]["start"]) if words else aligned_start
     line_end = max(float(word["end"]) for word in words) if words else aligned_end
-    if next_anchor is not None and next_anchor > anchor:
-        line_end = min(line_end, next_anchor + 0.35)
+
+    # The old v7 cap was next_anchor + 350 ms.  That could cut off a sustained
+    # final word.  v7.1 uses the acoustically aligned next-line context as the
+    # natural right boundary.  Only when context is unavailable do we use the
+    # (larger) configured overlap as a conservative hard cap.
+    if lookahead_start is not None:
+        hard_cap = float(lookahead_start)
+    elif next_anchor is not None and next_anchor > anchor:
+        hard_cap = float(next_anchor) + float(post_margin)
+    else:
+        hard_cap = None
+    if hard_cap is not None:
+        line_end = min(line_end, max(line_start + 0.05, hard_cap))
         for word in words:
-            if float(word["end"]) > next_anchor + 0.35:
-                word["end"] = round(max(float(word["start"]) + 0.01, next_anchor + 0.35), 3)
-                word["origin"] = "repaired_next_anchor_cap"
-                word["confidence"] = min(float(word.get("confidence") or 0.0), 0.25)
+            if float(word["end"]) > hard_cap:
+                word["end"] = round(max(float(word["start"]) + 0.01, hard_cap), 3)
+                word["origin"] = "repaired_boundary_context_cap"
+                word["confidence"] = min(float(word.get("confidence") or 0.0), 0.35)
 
     line_conf = float(np.mean(aligned_confidences)) if aligned_confidences else 0.10
     anchor_delta_ms = (line_start - anchor) * 1000.0
+    last_word = next((w for w in reversed(words) if w.get("start") is not None), None)
+    boundary_lead_ms = None
+    if last_word is not None and next_anchor is not None:
+        boundary_lead_ms = (float(next_anchor) - float(last_word["start"])) * 1000.0
+    context_gap_ms = None
+    if last_word is not None and lookahead_start is not None:
+        context_gap_ms = (float(lookahead_start) - float(last_word["start"])) * 1000.0
+
     return {
         **source_line,
         "start": round(line_start, 3),
@@ -700,17 +851,226 @@ def _align_line_once(
         "anchor_delta_ms": round(anchor_delta_ms, 1),
         "window_start": round(window_start, 3),
         "window_end": round(window_end, 3),
+        "lookahead_text": context_text or None,
+        "lookahead_start": lookahead_start,
+        "lookahead_confidence": lookahead_confidence,
+        "lookahead_words_requested": requested_context_words,
+        "lookahead_words_used": used_context_words,
+        "boundary_lead_ms": round(boundary_lead_ms, 1) if boundary_lead_ms is not None else None,
+        "boundary_context_gap_ms": round(context_gap_ms, 1) if context_gap_ms is not None else None,
     }
 
 
-def _next_anchor(source_lines: list[dict[str, Any]], index: int) -> float | None:
+def _last_word_candidate_score(
+    word: dict[str, Any],
+    *,
+    next_anchor: float | None,
+    lookahead_start: float | None,
+) -> float:
+    """Score a last-word candidate without pretending the LRC anchor is exact."""
+    confidence = float(word.get("confidence") or 0.0)
+    start = float(word.get("start") or 0.0)
+    end = float(word.get("end") or start)
+    score = confidence
+    origin = str(word.get("origin") or "")
+    if "low_confidence" in origin or origin.startswith("interpolated"):
+        score -= 0.12
+    if next_anchor is not None:
+        relative = start - float(next_anchor)
+        if relative >= 0.08:
+            score -= 0.52
+        elif relative >= -0.03:
+            score -= 0.18
+    if lookahead_start is not None:
+        gap = float(lookahead_start) - start
+        if gap <= 0.0:
+            score -= 0.65
+        elif gap < 0.055:
+            score -= 0.16
+        elif gap >= 0.10:
+            score += min(0.06, gap * 0.03)
+        if end > float(lookahead_start) + 0.05:
+            score -= 0.18
+    if end - start < 0.025:
+        score -= 0.05
+    return score
+
+
+def _boundary_is_suspicious(
+    line: dict[str, Any],
+    *,
+    next_anchor: float | None,
+    profile: AlignmentProfile,
+) -> bool:
+    if next_anchor is None:
+        return False
+    words = line.get("words") or []
+    last_word = next((w for w in reversed(words) if isinstance(w.get("start"), (int, float))), None)
+    if last_word is None:
+        return True
+    start = float(last_word["start"])
+    confidence = float(last_word.get("confidence") or 0.0)
+    if confidence < profile.boundary_confidence_threshold:
+        return True
+    if start >= float(next_anchor) - profile.boundary_danger_zone:
+        return True
+    lookahead_start = line.get("lookahead_start")
+    if isinstance(lookahead_start, (int, float)) and float(lookahead_start) - start < 0.065:
+        return True
+    if float(line.get("window_end") or 0.0) - float(last_word.get("end") or start) < 0.055:
+        return True
+    return False
+
+
+def _refine_last_word_boundary(
+    waveform: np.ndarray,
+    source_line: dict[str, Any],
+    next_line: dict[str, Any] | None,
+    next_anchor: float | None,
+    current: dict[str, Any],
+    *,
+    language: str,
+    profile: AlignmentProfile,
+    model: Any,
+    token_dict: dict[str, int],
+    device: str,
+    romanizer: Any,
+) -> dict[str, Any]:
+    """Second, narrow CTC pass around the last word and the next-line onset.
+
+    It uses the already-aligned penultimate/antepenultimate word only as a crop
+    hint.  The actual last-word timestamp must still be supported acoustically.
+    """
+    if next_anchor is None or next_line is None:
+        return current
+    normalized_words, _ = normalize_words(str(source_line.get("text") or ""), language, romanizer)
+    alignable_indices = [i for i, item in enumerate(normalized_words) if item.token_start is not None]
+    if not alignable_indices:
+        return current
+    last_index = alignable_indices[-1]
+    tail_start_index = max(0, last_index - 2)
+    tail_items = normalized_words[tail_start_index:last_index + 1]
+    tail_text = " ".join(item.display for item in tail_items).strip()
+    if not tail_text:
+        return current
+
+    current_words = current.get("words") or []
+    seed_start = None
+    if tail_start_index < len(current_words):
+        value = current_words[tail_start_index].get("start")
+        if isinstance(value, (int, float)):
+            seed_start = float(value)
+    if seed_start is None:
+        anchor_raw = source_line.get("anchor_start")
+        if not isinstance(anchor_raw, (int, float)):
+            anchor_raw = source_line.get("start")
+        seed_start = float(anchor_raw) if isinstance(anchor_raw, (int, float)) else max(0.0, next_anchor - 2.0)
+
+    pseudo_line = {
+        "text": tail_text,
+        "start": seed_start,
+        "anchor_start": seed_start,
+        "anchor_origin": "boundary_rescue_seed",
+    }
+    try:
+        rescue = _align_line_once(
+            waveform,
+            pseudo_line,
+            next_anchor,
+            next_line=next_line,
+            lookahead_words=max(1, profile.lookahead_words),
+            language=language,
+            model=model,
+            token_dict=token_dict,
+            device=device,
+            pre_margin=profile.boundary_rescue_pre_margin,
+            post_margin=profile.boundary_rescue_post_margin,
+            last_line_window=profile.last_line_window,
+            method_suffix="boundary-rescue",
+            romanizer=romanizer,
+        )
+    except Exception:
+        return current
+
+    rescue_words = rescue.get("words") or []
+    if not rescue_words or not current_words:
+        return current
+    rescue_last = rescue_words[-1]
+    primary_last = current_words[last_index] if last_index < len(current_words) else current_words[-1]
+    if not isinstance(rescue_last.get("start"), (int, float)) or not isinstance(primary_last.get("start"), (int, float)):
+        return current
+
+    primary_score = _last_word_candidate_score(
+        primary_last,
+        next_anchor=next_anchor,
+        lookahead_start=current.get("lookahead_start") if isinstance(current.get("lookahead_start"), (int, float)) else None,
+    )
+    rescue_score = _last_word_candidate_score(
+        rescue_last,
+        next_anchor=next_anchor,
+        lookahead_start=rescue.get("lookahead_start") if isinstance(rescue.get("lookahead_start"), (int, float)) else None,
+    )
+    primary_start = float(primary_last["start"])
+    rescue_start = float(rescue_last["start"])
+    primary_conf = float(primary_last.get("confidence") or 0.0)
+    rescue_conf = float(rescue_last.get("confidence") or 0.0)
+    suspicious = _boundary_is_suspicious(current, next_anchor=next_anchor, profile=profile)
+
+    accept = rescue_score > primary_score + 0.015
+    # If the primary timestamp is stuck against the next anchor, accept a clear
+    # earlier acoustic solution even when its raw CTC confidence is almost tied.
+    if (
+        not accept
+        and suspicious
+        and rescue_start <= primary_start - 0.060
+        and rescue_conf >= primary_conf - 0.035
+        and rescue_start < float(next_anchor) - 0.035
+    ):
+        accept = True
+    if not accept:
+        current["boundary_rescue_checked"] = True
+        current["boundary_rescue_used"] = False
+        current["boundary_rescue_score_delta"] = round(rescue_score - primary_score, 4)
+        return current
+
+    replacement = dict(rescue_last)
+    replacement["origin"] = "aligned_boundary_rescue"
+    replacement["boundary_previous_start"] = round(primary_start, 3)
+    current_words[last_index] = replacement
+    current["words"] = current_words
+    current["lookahead_start"] = rescue.get("lookahead_start") or current.get("lookahead_start")
+    current["lookahead_confidence"] = rescue.get("lookahead_confidence") or current.get("lookahead_confidence")
+    current["boundary_rescue_checked"] = True
+    current["boundary_rescue_used"] = True
+    current["boundary_rescue_score_delta"] = round(rescue_score - primary_score, 4)
+    current["boundary_rescue_delta_ms"] = round((rescue_start - primary_start) * 1000.0, 1)
+    current["method"] = f"{current.get('method') or BACKEND_NAME}+boundary-rescue"
+    current["end"] = round(max(float(w.get("end") or w.get("start") or current.get("start") or 0.0) for w in current_words), 3)
+    aligned_confs = [
+        float(w.get("confidence") or 0.0)
+        for w in current_words
+        if not str(w.get("origin") or "").startswith("interpolated")
+    ]
+    if aligned_confs:
+        current["confidence"] = round(float(np.mean(aligned_confs)), 4)
+    current["boundary_lead_ms"] = round((float(next_anchor) - rescue_start) * 1000.0, 1)
+    if isinstance(current.get("lookahead_start"), (int, float)):
+        current["boundary_context_gap_ms"] = round((float(current["lookahead_start"]) - rescue_start) * 1000.0, 1)
+    return current
+
+
+def _next_timed_line(source_lines: list[dict[str, Any]], index: int) -> tuple[dict[str, Any] | None, float | None]:
     for future in source_lines[index + 1:]:
         value = future.get("anchor_start")
         if not isinstance(value, (int, float)):
             value = future.get("start")
         if isinstance(value, (int, float)):
-            return float(value)
-    return None
+            return future, float(value)
+    return None, None
+
+
+def _next_anchor(source_lines: list[dict[str, Any]], index: int) -> float | None:
+    return _next_timed_line(source_lines, index)[1]
 
 
 def _align_lines(
@@ -733,13 +1093,15 @@ def _align_lines(
 
     for order, index in enumerate(indices):
         source = source_lines[index]
-        next_anchor = _next_anchor(source_lines, index)
+        next_line, next_anchor = _next_timed_line(source_lines, index)
         if progress_callback:
             pct = 4 + round((order / total) * 90)
-            progress_callback(pct, f"Forced alignment: строка {index + 1}/{len(source_lines)}")
+            progress_callback(pct, f"Boundary-aware alignment: строка {index + 1}/{len(source_lines)}")
 
         primary = _align_line_once(
             waveform, source, next_anchor,
+            next_line=next_line,
+            lookahead_words=profile.lookahead_words,
             language=language,
             model=model,
             token_dict=token_dict,
@@ -747,7 +1109,7 @@ def _align_lines(
             pre_margin=profile.pre_margin,
             post_margin=profile.post_margin,
             last_line_window=profile.last_line_window,
-            method_suffix="local",
+            method_suffix="local+lookahead",
             romanizer=romanizer,
         )
         best = primary
@@ -764,6 +1126,8 @@ def _align_lines(
             try:
                 retry = _align_line_once(
                     waveform, source, next_anchor,
+                    next_line=next_line,
+                    lookahead_words=profile.lookahead_words,
                     language=language,
                     model=model,
                     token_dict=token_dict,
@@ -771,7 +1135,7 @@ def _align_lines(
                     pre_margin=profile.retry_pre_margin,
                     post_margin=profile.retry_post_margin,
                     last_line_window=profile.last_line_window + 3.0,
-                    method_suffix="expanded-retry",
+                    method_suffix="expanded-retry+lookahead",
                     romanizer=romanizer,
                 )
                 if _alignment_candidate_score(retry) > _alignment_candidate_score(primary) + 0.005:
@@ -779,10 +1143,33 @@ def _align_lines(
             except Exception:
                 # A failed retry must never destroy a valid first pass.
                 pass
+
+        # Max-quality mode always verifies the cross-line boundary in a short
+        # window. Balanced/fast do it only when the last word is suspicious.
+        if (
+            next_anchor is not None
+            and next_line is not None
+            and (
+                profile.boundary_refine_all
+                or _boundary_is_suspicious(best, next_anchor=next_anchor, profile=profile)
+            )
+        ):
+            best = _refine_last_word_boundary(
+                waveform,
+                source,
+                next_line,
+                next_anchor,
+                best,
+                language=language,
+                profile=profile,
+                model=model,
+                token_dict=token_dict,
+                device=device,
+                romanizer=romanizer,
+            )
         result_map[index] = best
 
     return [result_map[i] for i in indices]
-
 
 def _demucs_available() -> bool:
     try:
@@ -801,7 +1188,7 @@ def _separate_vocals(
 ) -> tuple[str, tempfile.TemporaryDirectory[str]]:
     if not _demucs_available():
         raise RuntimeError("Demucs не установлен (это необязательный fallback)")
-    temp_dir = tempfile.TemporaryDirectory(prefix="lrc_extandator_v7_demucs_")
+    temp_dir = tempfile.TemporaryDirectory(prefix="lrc_extandator_v7_1_demucs_")
     output = Path(temp_dir.name)
     device = "cuda" if use_cuda else "cpu"
     if progress_callback:
@@ -883,7 +1270,7 @@ def _validate_timed_lines(source_lines: list[dict[str, Any]]) -> None:
     if missing:
         preview = ", ".join(map(str, missing[:8])) + ("…" if len(missing) > 8 else "")
         raise ValueError(
-            "Forced Alignment v7 требует синхронизированный LRC с таймкодом каждой строки. "
+            "Forced Alignment v7.1 требует синхронизированный LRC с таймкодом каждой строки. "
             f"Нет таймкода у строк: {preview}. ASR намеренно не используется."
         )
 
@@ -921,7 +1308,7 @@ class AlignmentEngine:
 
         started = time.perf_counter()
         if progress_callback:
-            progress_callback(1, "Forced Alignment v7: LRC anchors → local CTC windows")
+            progress_callback(1, "Forced Alignment v7.1: anchors → lookahead CTC → boundary rescue")
         waveform = decode_audio_16k_mono(audio_path, progress_callback)
         model, token_dict, device = _load_runtime(progress_callback)
         accel = detect_acceleration()
@@ -962,6 +1349,11 @@ class AlignmentEngine:
                 i for i, line in enumerate(mix_lines)
                 if float(line.get("confidence") or 0.0) < profile.weak_line_threshold
                 or abs(float(line.get("anchor_delta_ms") or 0.0)) > profile.anchor_retry_delta * 1000.0
+                or _boundary_is_suspicious(
+                    line,
+                    next_anchor=_next_anchor(source_lines, i),
+                    profile=profile,
+                )
             }
             weak_ratio = len(weak_indices) / max(1, len(mix_lines))
             if options.use_demucs == "auto" and profile.name != "fast":

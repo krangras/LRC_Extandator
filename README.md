@@ -1,8 +1,8 @@
-# LRC Extandator — Forced Alignment v7
+# LRC Extandator — Forced Alignment v7.1 Boundary-Aware
 
 Локальный инструмент для превращения **уже синхронизированного построчного LRC** в пословный ELRC.
 
-Главное изменение v7: текст больше не распознаётся заново. Движок считает LRC известной истиной и решает только задачу **когда произнесено каждое известное слово**.
+Основа v7/v7.1: текст больше не распознаётся заново. Движок считает LRC известной истиной и решает только задачу **когда произнесено каждое известное слово**.
 
 ## Новый pipeline
 
@@ -12,11 +12,13 @@
 [00:42.100] Give me a reason to why I'm here
 [00:46.300] I've been so far from home
   ↓
-локальное окно около 42.100…46.300
+локальное окно около 42.100…46.300 + overlap за следующий anchor
   ↓
 MMS forced-alignment acoustic model
   ↓
-CTC Viterbi по известной строке
+CTC Viterbi: текущая строка + 1–3 служебных слова следующей строки
+  ↓
+проверка границы + узкий rescue-pass последнего слова
   ↓
 word boundaries + confidence + origin
   ↓
@@ -38,9 +40,13 @@ ELRC
 
 ## Что изменилось
 
-- `Alignment Engine 7.0.0` использует `torchaudio.pipelines.MMS_FA` как acoustic model;
+- `Alignment Engine 7.1.0` использует `torchaudio.pipelines.MMS_FA` как acoustic model;
 - сам forced-alignment DP реализован внутри проекта (`ctc_viterbi_align`);
-- каждая строка анализируется только в маленьком окне между LRC-якорями;
+- каждая строка анализируется в маленьком окне с overlap за следующий LRC-якорь;
+- первые 1–3 слова следующей строки добавляются только как CTC lookahead и затем удаляются из результата;
+- если последнее слово прилипло к следующему anchor или имеет слабую confidence, запускается отдельный короткий boundary-rescue;
+- в `max` boundary-rescue проверяет каждую межстрочную границу, а не только явно слабые строки;
+- если длинный lookahead не помещается, контекст автоматически уменьшается 3 → 2 → 1 → 0 без повторного инференса;
 - слабая строка получает максимум один расширенный retry;
 - Demucs в режиме `auto` запускается только при низком качестве первого прохода;
 - перед Demucs acoustic model выгружается из VRAM, что полезно для видеокарт на 6 GB;
@@ -66,7 +72,7 @@ ELRC
 Для MP3/M4A/AAC/OGG рекомендуется `ffmpeg` в `PATH`. Также поддерживается структура:
 
 ```text
-LRC_Extandator_ForcedAlignment_v7/
+LRC_Extandator_ForcedAlignment_v7_1/
   ffmpeg/
     bin/
       ffmpeg.exe
@@ -89,19 +95,19 @@ I open my eyes and these lies
 They breed and they feed off of me
 ```
 
-Во втором случае неизвестно даже приблизительное положение строк, а v7 намеренно не занимается распознаванием песни с нуля.
+Во втором случае неизвестно даже приблизительное положение строк, а v7.1 намеренно не занимается распознаванием песни с нуля.
 
 ## Режимы качества
 
 - **fast** — один проход по исходному mix, минимальные окна;
 - **balanced** — более широкие окна и retry слабых строк;
-- **max** — максимальные окна, строгий quality gate, адаптивный Demucs.
+- **max** — самый широкий overlap, 3-word lookahead, проверка каждой границы, rescue-pass и адаптивный Demucs.
 
 Для твоей RTX 4050 разумный дефолт — `max` + `Demucs: auto`.
 
 ## Почему Demucs не запускается сразу
 
-Большинству строк достаточно исходного mix. Поэтому v7 сначала делает дешёвый CTC alignment. Если confidence/quality нормальные — на этом всё. Если нет — только тогда делается вокальный retry.
+Большинству строк достаточно исходного mix. Поэтому v7.1 сначала делает дешёвый CTC alignment. Если confidence/quality нормальные — на этом всё. Если нет — только тогда делается вокальный retry.
 
 Это уменьшает общее время и пиковую VRAM-нагрузку.
 
@@ -123,7 +129,7 @@ They breed and they feed off of me
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-В текущей сборке есть тесты CTC Viterbi, повторяющихся символов, LRC-windowing, романизации известного текста, запрета plain-lyrics fallback, quality, benchmark-метрик и LRC/ELRC round-trip.
+В текущей сборке есть тесты CTC Viterbi, повторяющихся символов, lookahead/backoff, boundary guard, last-word rescue, LRC-windowing, романизации известного текста, запрета plain-lyrics fallback, quality, benchmark-метрик и LRC/ELRC round-trip.
 
 ## Benchmark
 
@@ -150,7 +156,7 @@ They breed and they feed off of me
 ## Ключевые файлы
 
 ```text
-alignment_engine.py   — MMS + local CTC Viterbi + Demucs retry
+alignment_engine.py   — MMS + lookahead CTC Viterbi + boundary rescue + Demucs retry
 alignment_quality.py  — confidence/quality gate
 alignment_cache.py    — persistent alignment cache
 lrc_maker.py          — orchestration и LRC providers

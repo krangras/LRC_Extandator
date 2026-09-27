@@ -10,12 +10,12 @@ import zlib
 from pathlib import Path
 from typing import Any
 
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 
 
 class AlignmentCache:
     def __init__(self, path: str | os.PathLike[str] | None = None, max_bytes: int = 2 * 1024**3):
-        root = Path(path) if path else Path(__file__).resolve().parent / ".cache" / "alignment_v7.sqlite3"
+        root = Path(path) if path else Path(__file__).resolve().parent / ".cache" / "alignment_v7_1.sqlite3"
         root.parent.mkdir(parents=True, exist_ok=True)
         self.path = root
         self.max_bytes = max_bytes

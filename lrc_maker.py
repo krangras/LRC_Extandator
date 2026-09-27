@@ -417,13 +417,13 @@ def generate_elrc(
 ):
     """Convert a known, timed LRC to word-timed ELRC by forced alignment.
 
-    Important V7 contract: if no timed LRC can be obtained, the function stops
+    Important V7.1 contract: if no timed LRC can be obtained, the function stops
     with a clear error.  It never guesses lyrics with an ASR model.
     """
     progress_callback = progress_callback or (lambda *_args: None)
     try:
         audio_path = str(Path(audio_path).resolve())
-        progress_callback(2, "Forced Alignment v7: проверяю аудио и LRC…")
+        progress_callback(2, "Forced Alignment v7.1: проверяю аудио и LRC…")
         if not os.path.isfile(audio_path):
             raise FileNotFoundError(audio_path)
 
@@ -470,7 +470,7 @@ def generate_elrc(
         if not source_lines:
             detail = " Найден только обычный текст без таймкодов." if supplied_plain else ""
             raise ValueError(
-                "Forced Alignment v7 не распознаёт текст песни с нуля. "
+                "Forced Alignment v7.1 не распознаёт текст песни с нуля. "
                 "Нужен обычный синхронизированный LRC вида [00:42.100] строка." + detail
             )
 
@@ -495,7 +495,7 @@ def generate_elrc(
             use_cache=bool(use_cache),
             retry_weak_lines=True,
         )
-        progress_callback(12, "LRC anchors готовы — запускаю локальный CTC forced alignment…")
+        progress_callback(12, "LRC anchors готовы — запускаю boundary-aware CTC forced alignment…")
         aligned = _engine().align(
             audio_path,
             source_lines,

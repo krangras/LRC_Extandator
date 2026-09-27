@@ -65,6 +65,7 @@
         <div><span>Aligned</span><b id="v7QualityAligned">—</b></div>
         <div><span>Interpolated</span><b id="v7QualityInterpolated">—</b></div>
         <div><span>Anchor MAE</span><b id="v7QualityAnchor">—</b></div>
+        <div><span>Boundary rescue</span><b id="v7QualityBoundary">—</b></div>
       </div>
       <div id="v7QualityNote" class="v7-quality-note"></div>`;
     result.prepend(card);
@@ -83,6 +84,7 @@
     document.getElementById('v7QualityAligned').textContent = `${Number(q.percent?.aligned ?? ((q.alignedWordRatio ?? 0) * 100)).toFixed(1)}%`;
     document.getElementById('v7QualityInterpolated').textContent = `${Number(q.percent?.interpolated ?? ((q.interpolatedWordRatio ?? 0) * 100)).toFixed(1)}%`;
     document.getElementById('v7QualityAnchor').textContent = q.anchorMaeMs == null ? '—' : `${Math.round(q.anchorMaeMs)} ms`;
+    document.getElementById('v7QualityBoundary').textContent = `${Number(q.boundaryRescues || 0)} / ${Number(q.boundaryWarnings || 0)} warn`;
     const selected = resultData.alignment?.selectedCandidate;
     const cache = resultData.alignment?.cacheHit ? ' · cache' : '';
     const candidate = selected ? ` · ${selected.label || (selected.use_demucs ? 'vocals/local-ctc' : 'mix/local-ctc')}` : '';
